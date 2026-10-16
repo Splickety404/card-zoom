@@ -38,9 +38,11 @@ The zoom can only be as sharp as the stream: a card that is 60 px tall in a 1080
 
 ## How auto spotting works
 
-`core/detect.js`, no ML model and no library. Every 350 ms it downsizes the frame to 480 px wide, finds edges, groups them into blobs, and keeps blobs whose box has a trading card's shape (63×88, upright or tapped sideways) with strong edges on all four sides. A tracker keeps boxes steady across frames. The zoom follows the biggest card (usually one held up to the camera or shown in a card overlay) until you click a different one in the "On screen" strip, which pins it. Tapped cards are turned upright automatically.
+`core/detect.js`, no ML model and no library. Every 350 ms it scales the frame to 800 px wide, finds edges, groups them into blobs, and keeps blobs whose box has a trading card's shape (63×88, upright or tapped sideways) with strong edges on all four sides. A tracker keeps boxes steady across frames. The zoom follows the biggest card (usually one held up to the camera or shown in a card overlay) until you click a different one in the "On screen" strip, which pins it. Tapped cards are turned upright automatically.
 
-**Identify automatically**: once the focused card has been steady for about 1.5 seconds, the page reads the name band at the top of the card with Tesseract.js (loaded from a CDN on first use) and searches the databases.
+**Identify automatically**: once the focused card has been steady for about 1.5 seconds (or when you click it), the page reads the name band at the top of the card with Tesseract.js (loaded from a CDN on first use), searches every database, then compares each result's scan with the stream crop (`core/match.js`) to pick the right card and printing. The zoom then shows the official high-res scan; **Stream** switches back to the enlarged crop. A weak picture match is shown as a "best guess" and the zoom stays on the stream view. Clicking any search result makes it the card's image.
+
+Small cards: detection works down to about 3% of the video height. Their names are usually too small to read, so a tiny card can be spotted but not always identified; picking it with a name search, or clicking a result, still gets the crisp scan. Identifying by picture alone (no name) would need a prebuilt image index of every card, which is the natural next step.
 
 Known limits, honestly stated:
 - Tested only on synthetic tables (the demo and the sample video), because this build environment can't reach YouTube, Twitch or the card APIs. Real streams with overlays, glare or sleeves will need tuning.

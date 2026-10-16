@@ -65,6 +65,13 @@ section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; 
 section h2 .grow { flex: 1; }
 #zoomBox { background: #000; border-radius: 6px; aspect-ratio: 63 / 88; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
 #zoom { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
+#official { max-width: 100%; max-height: 100%; border-radius: 4.5% / 3.2%; }
+#zoomCap { margin-top: 6px; min-height: 1.4em; }
+#zoomCap a { color: var(--accent); }
+.seg { display: inline-flex; text-transform: none; letter-spacing: 0; }
+.seg button { border-radius: 0; padding: 3px 8px; font-size: 12px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
 #zoomEmpty { color: #9aa1ad; padding: 16px; text-align: center; font-size: 13px; }
 .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .row label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
@@ -124,8 +131,9 @@ section h2 .grow { flex: 1; }
 
   <aside>
     <section>
-      <h2>Zoom <span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
-      <div id="zoomBox"><canvas id="zoom" hidden></canvas><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+      <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
+      <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+ <div id="zoomCap" class="hint"></div>
       <div class="row">
         <label><input id="sharpen" type="checkbox" checked> Sharpen</label>
         <label><input id="contrast" type="checkbox"> Boost contrast</label>
@@ -155,7 +163,7 @@ section h2 .grow { flex: 1; }
         <input id="q" type="text" placeholder="Card name" autocomplete="off">
         <button class="primary">Search</button>
       </form>
-      <div id="lookupMsg">Spotted cards are looked up automatically. You can also type a name. Click a result for a full size image.</div>
+      <div id="lookupMsg">Spotted cards are looked up automatically and the official scan replaces the stream view. Click a result to use it instead. Click a result for a full size image.</div>
       <div id="results"></div>
     </section>
   </aside>
@@ -166,6 +174,7 @@ section h2 .grow { flex: 1; }
 <script src="core/zoom.js"></script>
 <script src="core/detect.js"></script>
 <script src="core/lookup.js"></script>
+<script src="core/match.js"></script>
 <script src="core/ocr.js"></script>
 <script src="web/app.js"></script>
 <script>

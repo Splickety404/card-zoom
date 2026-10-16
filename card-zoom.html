@@ -65,6 +65,13 @@ section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; 
 section h2 .grow { flex: 1; }
 #zoomBox { background: #000; border-radius: 6px; aspect-ratio: 63 / 88; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
 #zoom { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
+#official { max-width: 100%; max-height: 100%; border-radius: 4.5% / 3.2%; }
+#zoomCap { margin-top: 6px; min-height: 1.4em; }
+#zoomCap a { color: var(--accent); }
+.seg { display: inline-flex; text-transform: none; letter-spacing: 0; }
+.seg button { border-radius: 0; padding: 3px 8px; font-size: 12px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
 #zoomEmpty { color: #9aa1ad; padding: 16px; text-align: center; font-size: 13px; }
 .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .row label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
@@ -124,8 +131,9 @@ section h2 .grow { flex: 1; }
 
   <aside>
     <section>
-      <h2>Zoom <span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
-      <div id="zoomBox"><canvas id="zoom" hidden></canvas><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+      <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
+      <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+ <div id="zoomCap" class="hint"></div>
       <div class="row">
         <label><input id="sharpen" type="checkbox" checked> Sharpen</label>
         <label><input id="contrast" type="checkbox"> Boost contrast</label>
@@ -155,7 +163,7 @@ section h2 .grow { flex: 1; }
         <input id="q" type="text" placeholder="Card name" autocomplete="off">
         <button class="primary">Search</button>
       </form>
-      <div id="lookupMsg">Spotted cards are looked up automatically. You can also type a name. Click a result for a full size image.</div>
+      <div id="lookupMsg">Spotted cards are looked up automatically and the official scan replaces the stream view. Click a result to use it instead. Click a result for a full size image.</div>
       <div id="results"></div>
     </section>
   </aside>
@@ -267,7 +275,7 @@ section h2 .grow { flex: 1; }
 <script>
 // ---- core/detect.js ----
 // Card Zoom core: finds card-shaped rectangles in a video frame, with no ML model or library.
-// Method: Sobel edges on a downscaled frame -> connected edge blobs -> keep blobs whose bounding
+// Method: Sobel edges on a frame scaled to 800 px wide -> connected edge blobs -> keep blobs whose bounding
 // box has a trading card's proportions (63x88 mm, upright or tapped) and whose four sides are
 // mostly edge pixels. A tracker smooths results across frames so boxes don't flicker.
 // Exposes window.CardZoom.detect.
@@ -287,7 +295,7 @@ section h2 .grow { flex: 1; }
     const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: sw, h: sh };
     const {
-      analysisWidth = 480, minHeightFrac = 0.05, maxHeightFrac = 0.95,
+      analysisWidth = 800, minHeightFrac = 0.03, maxHeightFrac = 0.95,
       aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
       minSideEdge = 0.4, minMeanSideEdge = 0.6,
     } = opts;
@@ -540,6 +548,71 @@ section h2 .grow { flex: 1; }
 
 </script>
 <script>
+// ---- core/match.js ----
+// Card Zoom core: picks which database result is the card on screen by comparing pictures.
+// A name search returns many printings (and, across games, many cards); each candidate's scan is
+// shrunk to a tiny thumbnail and compared with the stream crop after evening out brightness and
+// contrast, so stream lighting matters less. Exposes window.CardZoom.match.
+(function (root) {
+  'use strict';
+
+  const GW = 12, GH = 17; // comparison grid, card proportions
+  const mk = () => {
+    const c = typeof document !== 'undefined' ? document.createElement('canvas') : new OffscreenCanvas(GW, GH);
+    c.width = GW; c.height = GH; return c;
+  };
+
+  // Tiny normalised RGB signature of a card image (canvas, image or video frame region).
+  function signature(src, sx = 0, sy = 0, sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height) {
+    const c = mk(), ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, GW, GH);
+    const d = ctx.getImageData(0, 0, GW, GH).data, n = GW * GH, out = new Float32Array(n * 3);
+    // One mean and spread for all channels: evens out brightness and contrast but keeps colour,
+    // so a red card and a yellow card with the same frame layout still look different.
+    let sum = 0, sq = 0;
+    for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) { const v = d[i * 4 + ch]; sum += v; sq += v * v; }
+    const mean = sum / (n * 3), sd = Math.sqrt(Math.max(1, sq / (n * 3) - mean * mean));
+    for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) out[i * 3 + ch] = (d[i * 4 + ch] - mean) / sd;
+    return out;
+  }
+
+  // 1 = identical after normalising, around 0 = unrelated (correlation of the two signatures).
+  function similarity(a, b) {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+    return s / a.length;
+  }
+
+  function loadImage(url) {
+    return new Promise((ok, fail) => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => ok(im);
+      im.onerror = () => fail(new Error('image failed: ' + url));
+      im.src = url;
+    });
+  }
+
+  // crop: canvas of the card from the stream, upright. candidates: lookup results ({img, ...}).
+  // Returns candidates with a .match score, best first. Candidates whose scans can't be read
+  // (no CORS) keep their search order behind the scored ones.
+  async function rankByLook(crop, candidates, max = 12) {
+    const target = signature(crop);
+    const scored = await Promise.all(candidates.slice(0, max).map(async (c) => {
+      try { return { ...c, match: similarity(target, signature(await loadImage(c.img))) }; }
+      catch { return { ...c, match: null }; }
+    }));
+    const ok = scored.filter((c) => c.match !== null).sort((a, b) => b.match - a.match);
+    return ok.concat(scored.filter((c) => c.match === null), candidates.slice(max));
+  }
+
+  root.CardZoom = root.CardZoom || {};
+  root.CardZoom.match = { signature, similarity, rankByLook, loadImage };
+})(typeof window !== 'undefined' ? window : self);
+
+</script>
+<script>
 // ---- core/ocr.js ----
 // Card Zoom core: reads a card name from a zoomed crop with Tesseract.js, loaded on first use.
 // Exposes window.CardZoom.ocr. Note for an extension: Manifest V3 forbids remote scripts,
@@ -555,7 +628,13 @@ section h2 .grow { flex: 1; }
     worker = new Promise((ok, fail) => {
       const s = document.createElement('script');
       s.src = TESSERACT_URL;
-      s.onload = async () => { try { ok(await root.Tesseract.createWorker('eng')); } catch (e) { fail(e); } };
+      s.onload = async () => {
+        try {
+          const w = await root.Tesseract.createWorker('eng');
+          await w.setParameters({ tessedit_pageseg_mode: '7' }); // treat the image as one line of text
+          ok(w);
+        } catch (e) { fail(e); }
+      };
       s.onerror = () => fail(new Error('Could not load the text reader.'));
       document.head.appendChild(s);
     });
@@ -572,10 +651,40 @@ section h2 .grow { flex: 1; }
       .sort((a, b) => b.length - a.length)[0] || '';
   }
 
+  // Black text on white at ~80 px tall reads best: rescale the band, then Otsu threshold it.
+  function prepare(band) {
+    const scale = Math.min(4, Math.max(1, 80 / band.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(band.width * scale); c.height = Math.round(band.height * scale);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(band, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data, hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4) hist[d[i]]++;
+    const n = d.length / 4;
+    let sum = 0; for (let v = 0; v < 256; v++) sum += v * hist[v];
+    let wB = 0, sB = 0, best = 0, t = 128;
+    for (let v = 0; v < 256; v++) {
+      wB += hist[v]; if (!wB || wB === n) continue;
+      sB += v * hist[v];
+      const mB = sB / wB, mF = (sum - sB) / (n - wB), between = wB * (n - wB) * (mB - mF) ** 2;
+      if (between > best) { best = between; t = v; }
+    }
+    let dark = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] < t) dark++;
+    const invert = dark > n / 2; // light text on a dark title bar: flip so text is black
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (d[i] < t) !== invert ? 0 : 255;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
   // card: a canvas holding the zoomed card. Returns the guessed name, or ''.
   async function readCardName(card) {
     const w = await loadWorker();
-    const { data } = await w.recognize(root.CardZoom.zoom.nameBand(card));
+    const { data } = await w.recognize(prepare(root.CardZoom.zoom.nameBand(card)));
     return bestLine(data.text);
   }
 
@@ -591,7 +700,7 @@ section h2 .grow { flex: 1; }
 // would replace this file and keep core/ as is.
 (function () {
 'use strict';
-const { zoom: Z, detect: D, lookup: L, ocr: O } = window.CardZoom;
+const { zoom: Z, detect: D, lookup: L, ocr: O, match: M } = window.CardZoom;
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
 const zoom = $('zoom');
@@ -608,6 +717,8 @@ const S = {
   manual: null,       // manual selection, stage-relative fractions {x,y,w,h}
   live: false,
   identified: new Set(), // track ids already sent to OCR
+  ids: new Map(),     // track id (or 'manual') -> {card, ranked}: what the card was identified as
+  view: 'official',   // zoom shows the official scan when we have one, else the stream crop
   history: [],
 };
 const tracker = D.createTracker();
@@ -636,7 +747,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear();
+  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear(); S.ids.clear();
   renderSpotted(); renderMarks();
 }
 
@@ -871,6 +982,8 @@ function renderSpotted() {
     }
     c.classList.toggle('focus', t.id === S.focusId);
     c.classList.toggle('pinned', t.id === S.pinnedId);
+    const id = S.ids.get(t.id);
+    c.title = id && id.card ? id.card.name : 'Show this card';
     try {
       Z.renderCrop(S.video, Z.clampRect(t.x, t.y, t.w, t.h, S.video.videoWidth, S.video.videoHeight), c,
         { maxW: 120, maxH: 168, minScale: 0.1, sharpen: false, rotate: t.rotated && $('rotate').checked });
@@ -884,6 +997,7 @@ function pin(id) {
   S.focusId = id;
   renderMarks(); renderSpotted(); renderZoom(true);
   updateButtons();
+  if ($('autoId').checked && !identifying && !S.ids.has(id) && !S.identified.has(id)) { S.identified.add(id); identify(true); }
 }
 
 function setAuto(on) {
@@ -900,8 +1014,7 @@ async function maybeIdentify() {
   const t = S.tracks.find((t) => t.id === S.focusId);
   if (!t || t.hits < 4 || S.identified.has(t.id) || zoom.hidden) return;
   S.identified.add(t.id);
-  identifying = true;
-  try { await identify(true); } finally { identifying = false; }
+  await identify(true);
 }
 
 // ---------- Manual picking (fallback) ----------
@@ -963,9 +1076,44 @@ function renderZoom(addToHistory) {
   } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
   zoom.hidden = false; $('zoomEmpty').hidden = true;
   $('full').disabled = false; $('readName').disabled = false;
+  updateZoomView();
   if (addToHistory) pushHistory();
   if (lbLive) drawLightboxZoom();
 }
+// ---------- Official scan vs stream crop ----------
+const official = $('official');
+function currentKey() { return S.manual ? 'manual' : S.focusId; }
+function currentId() { const k = currentKey(); return k == null ? null : S.ids.get(k); }
+function updateZoomView() {
+  const id = currentId(), card = id && id.card;
+  // A weak look match is likely a misread name: keep the stream view unless the viewer asks.
+  const unsure = !!card && !id.picked && typeof card.match === 'number' && card.match < 0.5;
+  const showOfficial = !!card && S.view === 'official' && !zoom.hidden && (!unsure || id.forced);
+  if (card && official.dataset.src !== (card.big || card.img)) {
+    official.dataset.src = card.big || card.img;
+    official.src = card.big || card.img;
+    official.alt = card.name;
+  }
+  official.hidden = !showOfficial;
+  zoom.style.display = showOfficial ? 'none' : '';
+  $('viewOfficial').disabled = !card;
+  $('viewOfficial').classList.toggle('on', showOfficial);
+  $('viewStream').classList.toggle('on', !showOfficial);
+  const cap = $('zoomCap');
+  cap.replaceChildren();
+  if (card) {
+    const pct = typeof card.match === 'number' ? ` · ${Math.round(Math.max(0, card.match) * 100)}% look match` : '';
+    cap.append(`${unsure ? 'Best guess: ' : ''}${card.name} · ${L.GAMES[card.game].label}${card.set ? ' · ' + card.set : ''}${pct} `);
+    if (card.link) { const a = document.createElement('a'); a.href = card.link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Details'; cap.append(a); }
+  } else if (identifying && !zoom.hidden) cap.textContent = 'Identifying…';
+}
+$('viewOfficial').onclick = (e) => {
+  e.stopPropagation(); S.view = 'official';
+  const id = currentId(); if (id) id.forced = true;
+  updateZoomView();
+};
+$('viewStream').onclick = (e) => { e.stopPropagation(); S.view = 'stream'; updateZoomView(); };
+
 ['sharpen', 'contrast', 'rotate'].forEach((id) => $(id).addEventListener('change', () => { renderZoom(false); renderSpotted(); }));
 
 let histTimer = 0;
@@ -1012,6 +1160,7 @@ function drawLightboxZoom() {
 }
 function openLightboxZoom() {
   if (zoom.hidden) return;
+  if (!official.hidden) { const c = currentId().card; return openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name); }
   lbLive = true; drawLightboxZoom();
   $('lbContent').replaceChildren(lbCanvas);
   $('lbCap').textContent = 'Click or press Esc to close.';
@@ -1043,6 +1192,17 @@ async function runLookup(q) {
   $('lookupMsg').textContent = `Searching ${keys.map((k) => L.GAMES[k].label).join(', ')}…`;
   $('results').replaceChildren();
   const { results, failed } = await L.searchCards(q, keys);
+  renderResults(results);
+  const msg = $('lookupMsg');
+  msg.textContent = (results.length ? `${results.length} result${results.length > 1 ? 's' : ''} for "${q}". ` : `No matches for "${q}". `) +
+    (failed.length ? `Couldn't reach ${failed.map((k) => L.GAMES[k].label).join(', ')}. ` : '');
+  const a = document.createElement('a');
+  a.href = L.otherGamesUrl(q); a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Search TCGplayer';
+  msg.append(a, ' for other games.');
+  return results;
+}
+// Clicking a result makes it the zoomed card's official image (to correct a wrong match).
+function renderResults(results) {
   $('results').replaceChildren(...results.map((c) => {
     const el = document.createElement('div'); el.className = 'card';
     el.innerHTML = '<img loading="lazy" alt=""><span class="badge"></span><div class="name"></div>';
@@ -1050,29 +1210,43 @@ async function runLookup(q) {
     el.querySelector('img').alt = c.name;
     el.querySelector('.badge').textContent = L.GAMES[c.game].label;
     el.querySelector('.name').textContent = c.set ? `${c.name} · ${c.set}` : c.name;
-    el.onclick = () => openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name);
+    el.title = 'Use this image for the zoomed card';
+    el.onclick = () => {
+      const k = currentKey();
+      if (k == null || zoom.hidden) return openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name);
+      S.ids.set(k, { ...(S.ids.get(k) || {}), card: c, picked: true });
+      S.view = 'official'; updateZoomView(); renderSpotted();
+    };
     return el;
   }));
-  const msg = $('lookupMsg');
-  msg.textContent = (results.length ? `${results.length} result${results.length > 1 ? 's' : ''} for "${q}". ` : `No matches for "${q}". `) +
-    (failed.length ? `Couldn't reach ${failed.map((k) => L.GAMES[k].label).join(', ')}. ` : '');
-  const a = document.createElement('a');
-  a.href = L.otherGamesUrl(q); a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Search TCGplayer';
-  msg.append(a, ' for other games.');
 }
 $('lookupForm').onsubmit = (e) => { e.preventDefault(); runLookup($('q').value); };
 
 async function identify(auto) {
   if (zoom.hidden) return;
+  const key = currentKey();
+  // Work on a copy: the live zoom keeps changing while OCR and lookups run.
+  const crop = document.createElement('canvas');
+  crop.width = zoom.width; crop.height = zoom.height;
+  crop.getContext('2d').drawImage(zoom, 0, 0);
   const btn = $('readName'); btn.disabled = true; btn.textContent = 'Reading…';
+  identifying = true; updateZoomView();
   try {
-    const name = await O.readCardName(zoom);
+    const name = await O.readCardName(crop);
     if (!name) { if (!auto) $('lookupMsg').textContent = "Couldn't read a name. Try a tighter box around the card, or type it."; return; }
     $('q').value = name;
-    await runLookup(name);
+    const results = await runLookup(name);
+    if (!results.length) return;
+    const ranked = await M.rankByLook(crop, results);
+    renderResults(ranked);
+    if (key != null) S.ids.set(key, { card: ranked[0], ranked });
   } catch (e) {
     $('lookupMsg').textContent = e.message || 'Reading failed.';
-  } finally { btn.disabled = false; btn.textContent = 'Read name'; }
+  } finally {
+    identifying = false;
+    btn.disabled = false; btn.textContent = 'Read name';
+    updateZoomView(); renderSpotted();
+  }
 }
 $('readName').onclick = () => identify(false);
 

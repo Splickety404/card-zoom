@@ -1,5 +1,5 @@
 // Card Zoom core: finds card-shaped rectangles in a video frame, with no ML model or library.
-// Method: Sobel edges on a downscaled frame -> connected edge blobs -> keep blobs whose bounding
+// Method: Sobel edges on a frame scaled to 800 px wide -> connected edge blobs -> keep blobs whose bounding
 // box has a trading card's proportions (63x88 mm, upright or tapped) and whose four sides are
 // mostly edge pixels. A tracker smooths results across frames so boxes don't flicker.
 // Exposes window.CardZoom.detect.
@@ -19,7 +19,7 @@
     const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: sw, h: sh };
     const {
-      analysisWidth = 480, minHeightFrac = 0.05, maxHeightFrac = 0.95,
+      analysisWidth = 800, minHeightFrac = 0.03, maxHeightFrac = 0.95,
       aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
       minSideEdge = 0.4, minMeanSideEdge = 0.6,
     } = opts;

@@ -3,7 +3,7 @@
 // would replace this file and keep core/ as is.
 (function () {
 'use strict';
-const { zoom: Z, detect: D, lookup: L, ocr: O } = window.CardZoom;
+const { zoom: Z, detect: D, lookup: L, ocr: O, match: M } = window.CardZoom;
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
 const zoom = $('zoom');
@@ -20,6 +20,8 @@ const S = {
   manual: null,       // manual selection, stage-relative fractions {x,y,w,h}
   live: false,
   identified: new Set(), // track ids already sent to OCR
+  ids: new Map(),     // track id (or 'manual') -> {card, ranked}: what the card was identified as
+  view: 'official',   // zoom shows the official scan when we have one, else the stream crop
   history: [],
 };
 const tracker = D.createTracker();
@@ -48,7 +50,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear();
+  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear(); S.ids.clear();
   renderSpotted(); renderMarks();
 }
 
@@ -283,6 +285,8 @@ function renderSpotted() {
     }
     c.classList.toggle('focus', t.id === S.focusId);
     c.classList.toggle('pinned', t.id === S.pinnedId);
+    const id = S.ids.get(t.id);
+    c.title = id && id.card ? id.card.name : 'Show this card';
     try {
       Z.renderCrop(S.video, Z.clampRect(t.x, t.y, t.w, t.h, S.video.videoWidth, S.video.videoHeight), c,
         { maxW: 120, maxH: 168, minScale: 0.1, sharpen: false, rotate: t.rotated && $('rotate').checked });
@@ -296,6 +300,7 @@ function pin(id) {
   S.focusId = id;
   renderMarks(); renderSpotted(); renderZoom(true);
   updateButtons();
+  if ($('autoId').checked && !identifying && !S.ids.has(id) && !S.identified.has(id)) { S.identified.add(id); identify(true); }
 }
 
 function setAuto(on) {
@@ -312,8 +317,7 @@ async function maybeIdentify() {
   const t = S.tracks.find((t) => t.id === S.focusId);
   if (!t || t.hits < 4 || S.identified.has(t.id) || zoom.hidden) return;
   S.identified.add(t.id);
-  identifying = true;
-  try { await identify(true); } finally { identifying = false; }
+  await identify(true);
 }
 
 // ---------- Manual picking (fallback) ----------
@@ -375,9 +379,44 @@ function renderZoom(addToHistory) {
   } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
   zoom.hidden = false; $('zoomEmpty').hidden = true;
   $('full').disabled = false; $('readName').disabled = false;
+  updateZoomView();
   if (addToHistory) pushHistory();
   if (lbLive) drawLightboxZoom();
 }
+// ---------- Official scan vs stream crop ----------
+const official = $('official');
+function currentKey() { return S.manual ? 'manual' : S.focusId; }
+function currentId() { const k = currentKey(); return k == null ? null : S.ids.get(k); }
+function updateZoomView() {
+  const id = currentId(), card = id && id.card;
+  // A weak look match is likely a misread name: keep the stream view unless the viewer asks.
+  const unsure = !!card && !id.picked && typeof card.match === 'number' && card.match < 0.5;
+  const showOfficial = !!card && S.view === 'official' && !zoom.hidden && (!unsure || id.forced);
+  if (card && official.dataset.src !== (card.big || card.img)) {
+    official.dataset.src = card.big || card.img;
+    official.src = card.big || card.img;
+    official.alt = card.name;
+  }
+  official.hidden = !showOfficial;
+  zoom.style.display = showOfficial ? 'none' : '';
+  $('viewOfficial').disabled = !card;
+  $('viewOfficial').classList.toggle('on', showOfficial);
+  $('viewStream').classList.toggle('on', !showOfficial);
+  const cap = $('zoomCap');
+  cap.replaceChildren();
+  if (card) {
+    const pct = typeof card.match === 'number' ? ` · ${Math.round(Math.max(0, card.match) * 100)}% look match` : '';
+    cap.append(`${unsure ? 'Best guess: ' : ''}${card.name} · ${L.GAMES[card.game].label}${card.set ? ' · ' + card.set : ''}${pct} `);
+    if (card.link) { const a = document.createElement('a'); a.href = card.link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Details'; cap.append(a); }
+  } else if (identifying && !zoom.hidden) cap.textContent = 'Identifying…';
+}
+$('viewOfficial').onclick = (e) => {
+  e.stopPropagation(); S.view = 'official';
+  const id = currentId(); if (id) id.forced = true;
+  updateZoomView();
+};
+$('viewStream').onclick = (e) => { e.stopPropagation(); S.view = 'stream'; updateZoomView(); };
+
 ['sharpen', 'contrast', 'rotate'].forEach((id) => $(id).addEventListener('change', () => { renderZoom(false); renderSpotted(); }));
 
 let histTimer = 0;
@@ -424,6 +463,7 @@ function drawLightboxZoom() {
 }
 function openLightboxZoom() {
   if (zoom.hidden) return;
+  if (!official.hidden) { const c = currentId().card; return openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name); }
   lbLive = true; drawLightboxZoom();
   $('lbContent').replaceChildren(lbCanvas);
   $('lbCap').textContent = 'Click or press Esc to close.';
@@ -455,6 +495,17 @@ async function runLookup(q) {
   $('lookupMsg').textContent = `Searching ${keys.map((k) => L.GAMES[k].label).join(', ')}…`;
   $('results').replaceChildren();
   const { results, failed } = await L.searchCards(q, keys);
+  renderResults(results);
+  const msg = $('lookupMsg');
+  msg.textContent = (results.length ? `${results.length} result${results.length > 1 ? 's' : ''} for "${q}". ` : `No matches for "${q}". `) +
+    (failed.length ? `Couldn't reach ${failed.map((k) => L.GAMES[k].label).join(', ')}. ` : '');
+  const a = document.createElement('a');
+  a.href = L.otherGamesUrl(q); a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Search TCGplayer';
+  msg.append(a, ' for other games.');
+  return results;
+}
+// Clicking a result makes it the zoomed card's official image (to correct a wrong match).
+function renderResults(results) {
   $('results').replaceChildren(...results.map((c) => {
     const el = document.createElement('div'); el.className = 'card';
     el.innerHTML = '<img loading="lazy" alt=""><span class="badge"></span><div class="name"></div>';
@@ -462,29 +513,43 @@ async function runLookup(q) {
     el.querySelector('img').alt = c.name;
     el.querySelector('.badge').textContent = L.GAMES[c.game].label;
     el.querySelector('.name').textContent = c.set ? `${c.name} · ${c.set}` : c.name;
-    el.onclick = () => openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name);
+    el.title = 'Use this image for the zoomed card';
+    el.onclick = () => {
+      const k = currentKey();
+      if (k == null || zoom.hidden) return openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name);
+      S.ids.set(k, { ...(S.ids.get(k) || {}), card: c, picked: true });
+      S.view = 'official'; updateZoomView(); renderSpotted();
+    };
     return el;
   }));
-  const msg = $('lookupMsg');
-  msg.textContent = (results.length ? `${results.length} result${results.length > 1 ? 's' : ''} for "${q}". ` : `No matches for "${q}". `) +
-    (failed.length ? `Couldn't reach ${failed.map((k) => L.GAMES[k].label).join(', ')}. ` : '');
-  const a = document.createElement('a');
-  a.href = L.otherGamesUrl(q); a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Search TCGplayer';
-  msg.append(a, ' for other games.');
 }
 $('lookupForm').onsubmit = (e) => { e.preventDefault(); runLookup($('q').value); };
 
 async function identify(auto) {
   if (zoom.hidden) return;
+  const key = currentKey();
+  // Work on a copy: the live zoom keeps changing while OCR and lookups run.
+  const crop = document.createElement('canvas');
+  crop.width = zoom.width; crop.height = zoom.height;
+  crop.getContext('2d').drawImage(zoom, 0, 0);
   const btn = $('readName'); btn.disabled = true; btn.textContent = 'Reading…';
+  identifying = true; updateZoomView();
   try {
-    const name = await O.readCardName(zoom);
+    const name = await O.readCardName(crop);
     if (!name) { if (!auto) $('lookupMsg').textContent = "Couldn't read a name. Try a tighter box around the card, or type it."; return; }
     $('q').value = name;
-    await runLookup(name);
+    const results = await runLookup(name);
+    if (!results.length) return;
+    const ranked = await M.rankByLook(crop, results);
+    renderResults(ranked);
+    if (key != null) S.ids.set(key, { card: ranked[0], ranked });
   } catch (e) {
     $('lookupMsg').textContent = e.message || 'Reading failed.';
-  } finally { btn.disabled = false; btn.textContent = 'Read name'; }
+  } finally {
+    identifying = false;
+    btn.disabled = false; btn.textContent = 'Read name';
+    updateZoomView(); renderSpotted();
+  }
 }
 $('readName').onclick = () => identify(false);
 
