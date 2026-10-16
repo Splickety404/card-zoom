@@ -1,0 +1,74 @@
+# Card Zoom (prototype)
+
+A web page that plays a Twitch or YouTube card game stream, spots the cards on screen automatically, shows a large cleaned-up view of the one you care about, and looks up its full-resolution image in public card databases.
+
+Live: https://splickety404.github.io/card-zoom/
+
+## Run it
+
+`card-zoom.html` is the whole app in one file (built from the sources by `python3 tools/build.py`; rebuild after editing). Opened straight from disk it runs, and local video files work, but stream embeds won't play.
+
+Embeds need a real web origin (YouTube refuses `file://`, Twitch needs a `parent=` domain), so serve the folder:
+
+```
+cd card-zoom
+python3 -m http.server 8000
+```
+
+Open http://localhost:8000, paste a stream link, press **Load**, then **Start capture** and pick **this tab** in the browser's share dialog.
+
+To try it without a stream: http://localhost:8000/?demo (a fake table), or **Open video file** and pick `samples/synthetic-table.webm`.
+
+Keys: `A` auto spot on/off, `Z` pick a card by hand, `L` live zoom, `F` full screen, `Esc` close.
+
+## Can the page read the stream? (feasibility)
+
+**Not directly.** A YouTube or Twitch player is a cross-origin iframe. The browser does not let the page read its pixels: there is no `<video>` element to draw onto a canvas, and neither site offers a frame API. This is a hard browser security rule, not something an API key fixes.
+
+What does work:
+
+| Route | Works for | Trade-off |
+|---|---|---|
+| **Tab capture** (`getDisplayMedia`, used here) | Any embed, any site | The viewer clicks "Share this tab" once per session. Chrome/Edge also crop the capture to the player (Region Capture), so the math is exact. Desktop only; mobile browsers don't support it. |
+| **Direct video** (`<video crossorigin>`) | Local files, or video URLs whose host sends CORS headers | No prompt, but YouTube/Twitch never serve streams that way. |
+| **Browser extension** (later) | twitch.tv and youtube.com themselves | A content script can't read the site's `<video>` either when it's DRM or cross-origin, but `chrome.tabCapture` gives the same frames as tab capture without the share dialog. This is the smoothest end state. |
+| **Desktop/mobile app** (later) | Anything on screen | Screen recording permission; same core code in a webview. |
+
+The zoom can only be as sharp as the stream: a card that is 60 px tall in a 1080p stream is upscaled and sharpened, not restored. That is why the lookup matters: once a card is named, you see the official high-res scan.
+
+## How auto spotting works
+
+`core/detect.js`, no ML model and no library. Every 350 ms it downsizes the frame to 480 px wide, finds edges, groups them into blobs, and keeps blobs whose box has a trading card's shape (63×88, upright or tapped sideways) with strong edges on all four sides. A tracker keeps boxes steady across frames. The zoom follows the biggest card (usually one held up to the camera or shown in a card overlay) until you click a different one in the "On screen" strip, which pins it. Tapped cards are turned upright automatically.
+
+**Identify automatically**: once the focused card has been steady for about 1.5 seconds, the page reads the name band at the top of the card with Tesseract.js (loaded from a CDN on first use) and searches the databases.
+
+Known limits, honestly stated:
+- Tested only on synthetic tables (the demo and the sample video), because this build environment can't reach YouTube, Twitch or the card APIs. Real streams with overlays, glare or sleeves will need tuning.
+- Cards that touch or overlap can merge into one box, or be missed.
+- Card-shaped stream overlays (some streamers' card popups) will be spotted too; that is often what you want.
+- OCR on stream-quality text is hit and miss. Scryfall's fuzzy match forgives small typos; the others less so.
+- Upgrade path if needed: a small object detection model (e.g. YOLO via ONNX Runtime Web) as a drop-in replacement for `detectCards`.
+
+## Card databases
+
+All free, no key, CORS enabled, called straight from the browser (`core/lookup.js`):
+
+- Magic: Scryfall
+- Pokémon: pokemontcg.io
+- Yu-Gi-Oh!: YGOPRODeck (asks that apps don't hotlink images heavily; cache them before any real launch)
+- Lorcana: Lorcast
+
+Other games get a TCGplayer search link. Adding a game is one entry in `GAMES`.
+
+## Layout, built to port to an extension or app
+
+```
+index.html        page markup and styles
+web/app.js        page-only wiring: embeds, capture, buttons, panels
+core/zoom.js      selection <-> video pixel mapping, crop, upscale, sharpen, rotate
+core/detect.js    card detection and tracking
+core/lookup.js    card database search
+core/ocr.js       card name reading
+```
+
+`core/` has no page state and no DOM lookups; each file adds itself to `window.CardZoom` and works as a classic script, so an extension content script or an app webview can load the same files. For a Manifest V3 extension, bundle tesseract.js locally (`CardZoom.ocr.setTesseractUrl(...)`), since remote scripts aren't allowed.

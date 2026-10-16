@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Zoom</title>
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --panel-2: #1f232c; --line: #2c313c;
+  --text: #e8eaef; --muted: #9aa1ad; --accent: #7c9cff; --accent-2: #3d5afe;
+  --sel: #ffd166; --danger: #ff6b6b;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f5f8; --panel: #ffffff; --panel-2: #eef0f4; --line: #d8dce4;
+    --text: #1b1e25; --muted: #5d6573; --accent: #3d5afe; --accent-2: #2a44d8;
+    --sel: #e09f00; color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
+input[type=text], input[type=url], select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+kbd { font: 11px ui-monospace, monospace; border: 1px solid currentColor; opacity: .7; border-radius: 4px; padding: 0 4px; color: var(--muted); }
+
+header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+header #url { flex: 1 1 320px; }
+.hint { color: var(--muted); font-size: 12px; }
+
+main { flex: 1; display: flex; min-height: 0; }
+#left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#toolbar .sep { width: 1px; height: 22px; background: var(--line); }
+#status { margin-left: auto; color: var(--muted); font-size: 12px; }
+#stageWrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0; }
+#stage { position: relative; width: 100%; max-height: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; overflow: hidden; }
+#stage iframe, #stage video, #stage canvas.src { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: contain; }
+#empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #9aa1ad; text-align: center; padding: 24px; }
+#overlay { position: absolute; inset: 0; cursor: crosshair; display: none; }
+#overlay.active { display: block; background: rgba(124,156,255,.06); outline: 2px dashed var(--accent); outline-offset: -2px; }
+#marks { position: absolute; inset: 0; pointer-events: none; }
+.mark { position: absolute; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; cursor: pointer; }
+.mark.focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,156,255,.4); }
+#spotted { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; min-height: 40px; align-items: flex-start; }
+#spotted canvas { height: 84px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; flex: none; }
+#spotted canvas.focus { border-color: var(--accent); }
+#spotted canvas.pinned { border-color: var(--sel); }
+#selbox { position: absolute; border: 2px solid var(--sel); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); display: none; pointer-events: none; }
+
+aside { width: 420px; max-width: 45vw; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+section { padding: 12px; border-bottom: 1px solid var(--line); }
+section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+section h2 .grow { flex: 1; }
+#zoomBox { background: #000; border-radius: 6px; aspect-ratio: 63 / 88; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
+#zoom { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
+#zoomEmpty { color: #9aa1ad; padding: 16px; text-align: center; font-size: 13px; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.row label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
+#history { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+#history img { height: 72px; border-radius: 4px; border: 1px solid var(--line); cursor: pointer; }
+#lookupForm { display: flex; gap: 6px; }
+#q { flex: 1; }
+#results { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.card { position: relative; cursor: zoom-in; }
+.card img { width: 100%; border-radius: 6px; display: block; background: var(--panel-2); aspect-ratio: 63/88; object-fit: cover; }
+.card .badge { position: absolute; left: 4px; top: 4px; font-size: 10px; background: rgba(0,0,0,.7); color: #fff; padding: 1px 5px; border-radius: 3px; }
+.card .name { font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#lookupMsg { color: var(--muted); font-size: 12px; margin-top: 8px; }
+#lookupMsg a { color: var(--accent); }
+
+#lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; cursor: zoom-out; flex-direction: column; gap: 10px; }
+#lightbox.open { display: flex; }
+#lightbox img, #lightbox canvas { max-width: 96vw; max-height: 88vh; border-radius: 10px; }
+#lightbox .cap { color: #ddd; font-size: 13px; }
+
+@media (max-width: 860px) {
+  main { flex-direction: column; overflow: auto; }
+  aside { width: 100%; max-width: none; border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+  #stageWrap { padding: 8px 16px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Card Zoom</h1>
+  <input id="url" type="url" placeholder="Paste a YouTube or Twitch link, or a direct video URL" autocomplete="off">
+  <button id="load" class="primary">Load</button>
+  <label class="hint"><input id="file" type="file" accept="video/*" hidden><button id="fileBtn" type="button">Open video file</button></label>
+</header>
+
+<main>
+  <div id="left">
+    <div id="toolbar">
+      <button id="capture" title="Let the page read the pixels of the stream (needed for YouTube and Twitch)">Start capture</button>
+      <span class="sep"></span>
+      <button id="auto" class="on" title="Find cards in the video automatically">Auto spot <kbd>A</kbd></button>
+      <button id="selectMode" disabled title="Drag over a card in the video yourself">Pick manually <kbd>Z</kbd></button>
+      <button id="live" disabled title="Keep updating the zoom from the live video">Live <kbd>L</kbd></button>
+      <span id="status">Load a stream to begin.</span>
+    </div>
+    <div id="stageWrap">
+      <div id="stage">
+        <div id="empty">
+          <div style="font-size:15px;color:#e8eaef">Paste a stream link above</div>
+          <div>YouTube and Twitch links (live or VOD) play here. Then press <b>Start capture</b> and choose <b>this tab</b>. Cards on screen are spotted automatically.</div>
+        </div>
+        <div id="marks"></div>
+        <div id="overlay"><div id="selbox"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Zoom <span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
+      <div id="zoomBox"><canvas id="zoom" hidden></canvas><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+      <div class="row">
+        <label><input id="sharpen" type="checkbox" checked> Sharpen</label>
+        <label><input id="contrast" type="checkbox"> Boost contrast</label>
+        <label><input id="rotate" type="checkbox"> Rotate 90°</label>
+      </div>
+    </section>
+    <section>
+      <h2>On screen <span class="grow"></span><label class="hint"><input id="autoId" type="checkbox" checked> Identify automatically</label></h2>
+      <div id="spotted"><div class="hint" id="spottedEmpty">No cards spotted yet.</div></div>
+    </section>
+    <section id="historySec" hidden>
+      <h2>Recent crops</h2>
+      <div id="history"></div>
+    </section>
+    <section>
+      <h2>Card lookup</h2>
+      <form id="lookupForm">
+        <select id="game" aria-label="Game">
+          <option value="all">All games</option>
+          <option value="mtg">Magic</option>
+          <option value="ptcg">Pokémon</option>
+          <option value="ygo">Yu-Gi-Oh!</option>
+          <option value="lorcana">Lorcana</option>
+        </select>
+        <input id="q" type="text" placeholder="Card name" autocomplete="off">
+        <button class="primary">Search</button>
+      </form>
+      <div id="lookupMsg">Spotted cards are looked up automatically. You can also type a name. Click a result for a full size image.</div>
+      <div id="results"></div>
+    </section>
+  </aside>
+</main>
+
+<div id="lightbox"><div id="lbContent"></div><div class="cap" id="lbCap"></div></div>
+
+<script>
+// ---- core/zoom.js ----
+// Card Zoom core: maps a selection to video pixels and renders an enlarged, cleaned-up crop.
+// No DOM lookups or page state here, so the same file can run in a web page, an extension
+// content script, or an app webview. Exposes window.CardZoom.zoom.
+(function (root) {
+  'use strict';
+
+  function clampRect(x, y, w, h, vw, vh) {
+    x = Math.max(0, Math.min(x, vw - 1)); y = Math.max(0, Math.min(y, vh - 1));
+    return { x, y, w: Math.max(1, Math.min(w, vw - x)), h: Math.max(1, Math.min(h, vh - y)) };
+  }
+
+  // sel: {x,y,w,h} as fractions of the element the user dragged over (the "stage").
+  // frame: how the video frame relates to that element:
+  //   'contain'  - the frame is drawn inside the stage with object-fit: contain (a <video>)
+  //   'stage'    - the frame is exactly the stage (tab capture cropped to the stage)
+  //   'viewport' - the frame is the whole browser viewport (uncropped tab capture)
+  // stageRect: the stage's getBoundingClientRect(); viewport: {width, height} in CSS px.
+  function mapSelection({ sel, videoW: vw, videoH: vh, frame, stageRect: r, viewport }) {
+    if (!vw || !vh) return null;
+    if (frame === 'stage') return clampRect(sel.x * vw, sel.y * vh, sel.w * vw, sel.h * vh, vw, vh);
+    if (frame === 'contain') {
+      const scale = Math.min(r.width / vw, r.height / vh);
+      const ox = (r.width - vw * scale) / 2, oy = (r.height - vh * scale) / 2;
+      return clampRect((sel.x * r.width - ox) / scale, (sel.y * r.height - oy) / scale,
+        sel.w * r.width / scale, sel.h * r.height / scale, vw, vh);
+    }
+    const kx = vw / viewport.width, ky = vh / viewport.height;
+    return clampRect((r.left + sel.x * r.width) * kx, (r.top + sel.y * r.height) * ky,
+      sel.w * r.width * kx, sel.h * r.height * ky, vw, vh);
+  }
+
+  // A click instead of a drag: a card-shaped (63:88) box centred on the point.
+  function clickToSelection(px, py, stageW, stageH, heightFrac = 0.22) {
+    const h = stageH * heightFrac, w = h * 63 / 88;
+    return { x: px - w / 2, y: py - h / 2, w, h };
+  }
+
+  // Unsharp mask: out = src + amount * (src - blur(src)), 3x3 box blur.
+  function sharpen(ctx, w, h, amount = 0.6) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, src = new Uint8ClampedArray(d);
+    const W = w * 4;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * W + x * 4;
+        for (let c = 0; c < 3; c++) {
+          const k = i + c;
+          const blur = (src[k - W - 4] + src[k - W] + src[k - W + 4] + src[k - 4] + src[k] + src[k + 4] +
+            src[k + W - 4] + src[k + W] + src[k + W + 4]) / 9;
+          d[k] = src[k] + amount * (src[k] - blur);
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  const work = typeof document !== 'undefined' ? document.createElement('canvas') : new OffscreenCanvas(1, 1);
+
+  // Draws rect of source (video, canvas or image) into out, scaled to fit maxW x maxH device px
+  // but never less than minScale. Throws if the source is cross-origin and unreadable.
+  function renderCrop(source, rect, out, { maxW, maxH, minScale = 3, rotate = false, sharpen: sh = true, contrast = false } = {}) {
+    const sw = rotate ? rect.h : rect.w, sh2 = rotate ? rect.w : rect.h;
+    const fit = Math.max(minScale, Math.min(maxW / sw, maxH / sh2));
+    const outW = Math.round(sw * fit), outH = Math.round(sh2 * fit);
+
+    // Two-step upscale (source -> 2x -> final) looks smoother than one big jump.
+    work.width = Math.round(rect.w * 2); work.height = Math.round(rect.h * 2);
+    const wctx = work.getContext('2d');
+    wctx.imageSmoothingEnabled = true; wctx.imageSmoothingQuality = 'high';
+    wctx.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, work.width, work.height);
+
+    out.width = outW; out.height = outH;
+    const ctx = out.getContext('2d', { willReadFrequently: true });
+    ctx.save();
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    if (contrast) ctx.filter = 'contrast(1.25) saturate(1.15)';
+    // Turn counter-clockwise: tapped cards are turned clockwise, so this stands them upright.
+    if (rotate) { ctx.translate(0, outH); ctx.rotate(-Math.PI / 2); ctx.drawImage(work, 0, 0, outH, outW); }
+    else ctx.drawImage(work, 0, 0, outW, outH);
+    ctx.restore();
+    if (sh) sharpen(ctx, outW, outH);
+    return { width: outW, height: outH };
+  }
+
+  // Most TCGs print the name in the top band of the card: grayscale, high-contrast copy of it for OCR.
+  function nameBand(card) {
+    const band = typeof document !== 'undefined' ? document.createElement('canvas') : new OffscreenCanvas(1, 1);
+    const bh = Math.round(card.height * 0.14);
+    band.width = card.width; band.height = bh;
+    const b = band.getContext('2d');
+    b.filter = 'grayscale(1) contrast(1.6)';
+    b.drawImage(card, 0, Math.round(card.height * 0.02), card.width, bh, 0, 0, card.width, bh);
+    return band;
+  }
+
+  root.CardZoom = root.CardZoom || {};
+  root.CardZoom.zoom = { mapSelection, clickToSelection, renderCrop, sharpen, nameBand, clampRect };
+})(typeof window !== 'undefined' ? window : self);
+
+</script>
+<script>
+// ---- core/detect.js ----
+// Card Zoom core: finds card-shaped rectangles in a video frame, with no ML model or library.
+// Method: Sobel edges on a downscaled frame -> connected edge blobs -> keep blobs whose bounding
+// box has a trading card's proportions (63x88 mm, upright or tapped) and whose four sides are
+// mostly edge pixels. A tracker smooths results across frames so boxes don't flicker.
+// Exposes window.CardZoom.detect.
+(function (root) {
+  'use strict';
+
+  const CARD = 63 / 88; // width / height of standard TCG cards (Magic, Pokémon, Lorcana, ~Yu-Gi-Oh)
+  const mk = (w, h) => {
+    const c = typeof document !== 'undefined' ? document.createElement('canvas') : new OffscreenCanvas(w, h);
+    c.width = w; c.height = h; return c;
+  };
+  let buf = null;
+
+  // source: video/canvas/image. region: {x,y,w,h} in source pixels to search (default: all).
+  // Returns [{x,y,w,h,score,rotated}] in source pixels, best first.
+  function detectCards(source, region, opts = {}) {
+    const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
+    region = region || { x: 0, y: 0, w: sw, h: sh };
+    const {
+      analysisWidth = 480, minHeightFrac = 0.07, maxHeightFrac = 0.95,
+      aspectTolerance = 0.16, minSideEdge = 0.4, minMeanSideEdge = 0.6,
+    } = opts;
+    const W = Math.min(analysisWidth, Math.round(region.w)), H = Math.round(region.h * W / region.w);
+    if (W < 32 || H < 32) return [];
+    if (!buf || buf.width !== W || buf.height !== H) buf = mk(W, H);
+    const ctx = buf.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(source, region.x, region.y, region.w, region.h, 0, 0, W, H);
+    const px = ctx.getImageData(0, 0, W, H).data;
+
+    const N = W * H, g = new Float32Array(N);
+    for (let i = 0, j = 0; i < N; i++, j += 4) g[i] = 0.299 * px[j] + 0.587 * px[j + 1] + 0.114 * px[j + 2];
+
+    // Sobel magnitude; threshold at the 82nd percentile (min 30) so it adapts to dim or busy streams.
+    const mag = new Float32Array(N);
+    const hist = new Uint32Array(256);
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        const gx = g[i - W + 1] + 2 * g[i + 1] + g[i + W + 1] - g[i - W - 1] - 2 * g[i - 1] - g[i + W - 1];
+        const gy = g[i + W - 1] + 2 * g[i + W] + g[i + W + 1] - g[i - W - 1] - 2 * g[i - W] - g[i - W + 1];
+        const m = Math.min(255, Math.sqrt(gx * gx + gy * gy) / 4);
+        mag[i] = m; hist[m | 0]++;
+      }
+    }
+    let acc = 0, t = 255;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= N * 0.82) { t = v; break; } }
+    t = Math.max(30, t);
+
+    // Binary edges, dilated once so a card's outline closes into one blob.
+    const e0 = new Uint8Array(N), edge = new Uint8Array(N);
+    for (let i = 0; i < N; i++) e0[i] = mag[i] >= t ? 1 : 0;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        edge[i] = e0[i] | e0[i - 1] | e0[i + 1] | e0[i - W] | e0[i + W];
+      }
+    }
+
+    // Connected components (8-way) -> bounding boxes.
+    const label = new Int32Array(N), stack = new Int32Array(N);
+    const boxes = [];
+    let next = 1;
+    for (let s = 0; s < N; s++) {
+      if (!edge[s] || label[s]) continue;
+      let sp = 0, x0 = W, y0 = H, x1 = 0, y1 = 0;
+      stack[sp++] = s; label[s] = next;
+      while (sp) {
+        const i = stack[--sp], x = i % W, y = (i / W) | 0;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy; if (yy < 0 || yy >= H) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx; if (xx < 0 || xx >= W) continue;
+            const k = yy * W + xx;
+            if (edge[k] && !label[k]) { label[k] = next; stack[sp++] = k; }
+          }
+        }
+      }
+      boxes.push({ x0, y0, x1, y1 });
+      next++;
+    }
+
+    // Fraction of a box side that lies on edge pixels (searching +-2 px across the side).
+    const sideScore = (ax, ay, bx, by) => {
+      const len = Math.max(Math.abs(bx - ax), Math.abs(by - ay)) + 1;
+      const horiz = ay === by;
+      let hit = 0;
+      for (let k = 0; k < len; k++) {
+        const x = horiz ? ax + k : ax, y = horiz ? ay : ay + k;
+        let ok = 0;
+        for (let d = -2; d <= 2 && !ok; d++) {
+          const xx = horiz ? x : x + d, yy = horiz ? y + d : y;
+          if (xx >= 0 && yy >= 0 && xx < W && yy < H && edge[yy * W + xx]) ok = 1;
+        }
+        hit += ok;
+      }
+      return hit / len;
+    };
+
+    let cands = [];
+    for (const b of boxes) {
+      const w = b.x1 - b.x0 + 1, h = b.y1 - b.y0 + 1;
+      const short = Math.min(w, h), long = Math.max(w, h);
+      if (long < H * minHeightFrac || long > H * maxHeightFrac) continue;
+      const ratio = short / long;
+      const aspectErr = Math.abs(ratio - CARD) / CARD;
+      if (aspectErr > aspectTolerance) continue;
+      const sides = [sideScore(b.x0, b.y0, b.x1, b.y0), sideScore(b.x0, b.y1, b.x1, b.y1),
+        sideScore(b.x0, b.y0, b.x0, b.y1), sideScore(b.x1, b.y0, b.x1, b.y1)];
+      const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
+      if (Math.min(...sides) < minSideEdge || mean < minMeanSideEdge) continue;
+      cands.push({ x0: b.x0, y0: b.y0, w, h, score: mean * (1 - aspectErr), rotated: w > h });
+    }
+
+    // Drop boxes inside a better or bigger box (e.g. a card's art frame inside the card).
+    cands.sort((a, b) => b.w * b.h - a.w * a.h);
+    const kept = [];
+    for (const c of cands) {
+      if (kept.some((k) => overlap(c, k) > 0.6)) continue;
+      kept.push(c);
+    }
+    const kx = region.w / W, ky = region.h / H;
+    return kept.sort((a, b) => b.score - a.score).map((c) => ({
+      x: region.x + c.x0 * kx, y: region.y + c.y0 * ky, w: c.w * kx, h: c.h * ky, score: c.score, rotated: c.rotated,
+    }));
+  }
+
+  // Share of a's area covered by b (boxes as {x0,y0,w,h} or {x,y,w,h}).
+  function overlap(a, b) {
+    const ax = a.x0 ?? a.x, ay = a.y0 ?? a.y, bx = b.x0 ?? b.x, by = b.y0 ?? b.y;
+    const ix = Math.max(0, Math.min(ax + a.w, bx + b.w) - Math.max(ax, bx));
+    const iy = Math.max(0, Math.min(ay + a.h, by + b.h) - Math.max(ay, by));
+    return (ix * iy) / (a.w * a.h);
+  }
+  const iou = (a, b) => {
+    const i = overlap(a, b) * a.w * a.h;
+    return i / (a.w * a.h + b.w * b.h - i);
+  };
+
+  // Keeps detections stable across frames: a card must be seen `confirm` times to show,
+  // and survives `patience` missed frames. Each track keeps a stable id.
+  function createTracker({ confirm = 2, patience = 3, smooth = 0.5 } = {}) {
+    let tracks = [], nextId = 1;
+    return {
+      update(dets) {
+        const used = new Set();
+        for (const tr of tracks) {
+          let best = -1, bestIou = 0.35;
+          dets.forEach((d, i) => { if (!used.has(i)) { const v = iou(tr, d); if (v > bestIou) { bestIou = v; best = i; } } });
+          if (best >= 0) {
+            const d = dets[best]; used.add(best);
+            for (const k of ['x', 'y', 'w', 'h']) tr[k] = tr[k] * smooth + d[k] * (1 - smooth);
+            tr.score = d.score; tr.rotated = d.rotated; tr.hits++; tr.missed = 0;
+          } else tr.missed++;
+        }
+        dets.forEach((d, i) => { if (!used.has(i)) tracks.push({ ...d, id: nextId++, hits: 1, missed: 0, born: Date.now() }); });
+        tracks = tracks.filter((t) => t.missed <= patience);
+        return this.visible();
+      },
+      visible() { return tracks.filter((t) => t.hits >= confirm); },
+      reset() { tracks = []; },
+    };
+  }
+
+  root.CardZoom = root.CardZoom || {};
+  root.CardZoom.detect = { detectCards, createTracker, iou };
+})(typeof window !== 'undefined' ? window : self);
+
+</script>
+<script>
+// ---- core/lookup.js ----
+// Card Zoom core: card search across free public TCG databases. No DOM use.
+// All four APIs need no key and send CORS headers, so a page or extension can call them directly.
+// Exposes window.CardZoom.lookup. Add a game by adding an entry to GAMES.
+(function (root) {
+  'use strict';
+
+  const GAMES = {
+    mtg: {
+      label: 'Magic',
+      async search(q) {
+        let r = await fetch(`https://api.scryfall.com/cards/search?unique=cards&order=edhrec&q=${encodeURIComponent(q)}`);
+        let list = r.ok ? (await r.json()).data : [];
+        if (!list.length) { // fuzzy match handles OCR typos like "Lightnlng Bolt"
+          r = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(q)}`);
+          if (r.ok) list = [await r.json()];
+        }
+        return list.map((c) => {
+          const iu = c.image_uris || c.card_faces?.[0]?.image_uris || {};
+          return { name: c.name, set: c.set_name, img: iu.normal || iu.large, big: iu.png || iu.large, link: c.scryfall_uri };
+        });
+      },
+    },
+    ptcg: {
+      label: 'Pokémon',
+      async search(q) {
+        const clean = q.replace(/["\\]/g, '').trim();
+        const query = /\s/.test(clean) ? `name:"${clean}"` : `name:${clean}*`;
+        const r = await fetch(`https://api.pokemontcg.io/v2/cards?pageSize=24&orderBy=-set.releaseDate&q=${encodeURIComponent(query)}`);
+        if (!r.ok) return [];
+        return (await r.json()).data.map((c) => ({ name: c.name, set: c.set?.name, img: c.images.small, big: c.images.large, link: c.tcgplayer?.url }));
+      },
+    },
+    ygo: {
+      label: 'Yu-Gi-Oh!',
+      async search(q) {
+        const r = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?num=24&offset=0&fname=${encodeURIComponent(q)}`);
+        if (!r.ok) return [];
+        return (await r.json()).data.map((c) => ({ name: c.name, set: c.card_sets?.[0]?.set_name, img: c.card_images[0].image_url_small, big: c.card_images[0].image_url, link: c.ygoprodeck_url }));
+      },
+    },
+    lorcana: {
+      label: 'Lorcana',
+      async search(q) {
+        const r = await fetch(`https://api.lorcast.com/v0/cards/search?q=${encodeURIComponent(q)}`);
+        if (!r.ok) return [];
+        return ((await r.json()).results || []).slice(0, 24).map((c) => {
+          const d = c.image_uris?.digital || {};
+          return { name: c.version ? `${c.name} - ${c.version}` : c.name, set: c.set?.name, img: d.normal || d.small, big: d.large || d.normal };
+        });
+      },
+    },
+  };
+
+  // Searches the given games in parallel. Results are interleaved so a multi-game search
+  // shows the best hit from each game first. Returns {results, failed: [gameKey]}.
+  async function searchCards(q, gameKeys = Object.keys(GAMES), limit = 30) {
+    q = q.trim();
+    if (!q) return { results: [], failed: [] };
+    const settled = await Promise.allSettled(gameKeys.map((k) => GAMES[k].search(q).then((l) => l.map((c) => ({ ...c, game: k })))));
+    const failed = gameKeys.filter((k, i) => settled[i].status === 'rejected');
+    const lists = settled.map((s) => (s.status === 'fulfilled' ? s.value.filter((c) => c.img) : []));
+    const results = [];
+    for (let i = 0; results.length < limit && lists.some((l) => l[i]); i++) lists.forEach((l) => l[i] && results.push(l[i]));
+    return { results: results.slice(0, limit), failed };
+  }
+
+  // Fallback for games without a database here.
+  const otherGamesUrl = (q) => `https://www.tcgplayer.com/search/all/product?q=${encodeURIComponent(q)}`;
+
+  root.CardZoom = root.CardZoom || {};
+  root.CardZoom.lookup = { GAMES, searchCards, otherGamesUrl };
+})(typeof window !== 'undefined' ? window : self);
+
+</script>
+<script>
+// ---- core/ocr.js ----
+// Card Zoom core: reads a card name from a zoomed crop with Tesseract.js, loaded on first use.
+// Exposes window.CardZoom.ocr. Note for an extension: Manifest V3 forbids remote scripts,
+// so bundle tesseract.js locally and point TESSERACT_URL at the packaged copy.
+(function (root) {
+  'use strict';
+
+  let TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  let worker = null;
+
+  function loadWorker() {
+    if (worker) return worker;
+    worker = new Promise((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = TESSERACT_URL;
+      s.onload = async () => { try { ok(await root.Tesseract.createWorker('eng')); } catch (e) { fail(e); } };
+      s.onerror = () => fail(new Error('Could not load the text reader.'));
+      document.head.appendChild(s);
+    });
+    worker.catch(() => { worker = null; });
+    return worker;
+  }
+
+  // Picks the most name-like line from OCR text: letters only, drops HP/level/stage noise.
+  function bestLine(text) {
+    return text.split('\n')
+      .map((l) => l.replace(/[^A-Za-z0-9'’,\- é]/g, ' ').replace(/\s+/g, ' ').trim())
+      .map((l) => l.replace(/\b\d+\b/g, '').replace(/\b(HP|LV|STAGE ?\d?|BASIC)\b/gi, '').replace(/\s+/g, ' ').trim())
+      .filter((l) => (l.match(/[A-Za-z]/g) || []).length >= 3)
+      .sort((a, b) => b.length - a.length)[0] || '';
+  }
+
+  // card: a canvas holding the zoomed card. Returns the guessed name, or ''.
+  async function readCardName(card) {
+    const w = await loadWorker();
+    const { data } = await w.recognize(root.CardZoom.zoom.nameBand(card));
+    return bestLine(data.text);
+  }
+
+  root.CardZoom = root.CardZoom || {};
+  root.CardZoom.ocr = { readCardName, bestLine, setTesseractUrl: (u) => { TESSERACT_URL = u; } };
+})(typeof window !== 'undefined' ? window : self);
+
+</script>
+<script>
+// ---- web/app.js ----
+// Card Zoom web page: wires the page's controls to the reusable core (core/*.js).
+// Everything specific to this page (embeds, buttons, panels) lives here; an extension or app
+// would replace this file and keep core/ as is.
+(function () {
+'use strict';
+const { zoom: Z, detect: D, lookup: L, ocr: O } = window.CardZoom;
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
+const zoom = $('zoom');
+
+const S = {
+  embed: null,        // iframe for a YouTube/Twitch embed
+  video: null,        // <video> whose frames we can read (direct video, or the capture stream)
+  kind: null,         // 'direct' | 'capture'
+  cropped: false,     // capture track cropped to #stage via Region Capture
+  auto: true,         // automatic card spotting on
+  tracks: [],         // cards currently spotted (source pixel boxes with stable ids)
+  focusId: null,      // track shown in the zoom
+  pinnedId: null,     // track the viewer clicked; otherwise the zoom follows the biggest card
+  manual: null,       // manual selection, stage-relative fractions {x,y,w,h}
+  live: false,
+  identified: new Set(), // track ids already sent to OCR
+  history: [],
+};
+const tracker = D.createTracker();
+
+function status(msg) { $('status').textContent = msg; }
+
+// ---------- Loading sources ----------
+function parseSource(raw) {
+  let u;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  const h = u.hostname.replace(/^www\.|^m\./, '');
+  if (h === 'youtu.be') return { type: 'youtube', id: u.pathname.slice(1) };
+  if (h.endsWith('youtube.com')) {
+    const id = u.searchParams.get('v') || (u.pathname.match(/\/(?:live|embed|shorts)\/([\w-]+)/) || [])[1];
+    if (id) return { type: 'youtube', id, t: u.searchParams.get('t') };
+  }
+  if (h.endsWith('twitch.tv')) {
+    const p = u.pathname.split('/').filter(Boolean);
+    if (p[0] === 'videos' && p[1]) return { type: 'twitch', video: p[1] };
+    if (h.startsWith('clips.') && p[0]) return { type: 'twitch', clip: p[0] };
+    if (p[1] === 'clip' && p[2]) return { type: 'twitch', clip: p[2] };
+    if (p[0]) return { type: 'twitch', channel: p[0] };
+  }
+  if (/\.(mp4|webm|ogv|mov)(\?|$)/i.test(u.pathname)) return { type: 'direct', src: u.href };
+  return null;
+}
+
+function resetSpotting() {
+  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear();
+  renderSpotted(); renderMarks();
+}
+
+function clearStage() {
+  stopLive();
+  if (S.embed) S.embed.remove();
+  S.embed = null;
+  if (S.kind === 'direct') { S.video.remove(); S.video = null; S.kind = null; }
+  $('empty').hidden = true;
+  S.manual = null;
+  resetSpotting();
+}
+
+function loadEmbed(src) {
+  clearStage();
+  stage.style.aspectRatio = '16 / 9';
+  const f = document.createElement('iframe');
+  f.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+  f.allowFullscreen = true;
+  if (src.type === 'youtube') {
+    const t = src.t ? '&start=' + parseInt(src.t, 10) : '';
+    f.src = `https://www.youtube.com/embed/${encodeURIComponent(src.id)}?autoplay=1&playsinline=1&rel=0${t}`;
+    f.referrerPolicy = 'strict-origin-when-cross-origin';
+  } else {
+    const parent = location.hostname || 'localhost';
+    const base = src.clip ? `https://clips.twitch.tv/embed?clip=${encodeURIComponent(src.clip)}`
+      : src.video ? `https://player.twitch.tv/?video=${encodeURIComponent(src.video)}`
+      : `https://player.twitch.tv/?channel=${encodeURIComponent(src.channel)}`;
+    f.src = `${base}&parent=${encodeURIComponent(parent)}&autoplay=true`;
+  }
+  stage.insertBefore(f, marks);
+  S.embed = f;
+  if (location.protocol === 'file:') status('Embeds need the page served from a web server (see README). "Open video file" works without one.');
+  else status(S.kind === 'capture' ? 'Capturing. Watching for cards.' : 'Press "Start capture" and choose this tab so the page can see the video.');
+  updateButtons();
+}
+
+function useVideoElement(v) {
+  v.className = 'src';
+  stage.insertBefore(v, marks);
+  if (S.kind === 'capture') stopCapture(true);
+  S.video = v; S.kind = 'direct';
+  updateButtons();
+}
+
+function loadDirect(url) {
+  clearStage();
+  const v = document.createElement('video');
+  v.crossOrigin = 'anonymous';
+  v.controls = true; v.autoplay = true; v.muted = true; v.playsInline = true; v.loop = true;
+  v.src = url;
+  v.addEventListener('loadedmetadata', () => {
+    stage.style.aspectRatio = `${v.videoWidth} / ${v.videoHeight}`;
+    status(`Video ${v.videoWidth}×${v.videoHeight}. Watching for cards.`);
+  });
+  v.addEventListener('error', () => status('That video could not be loaded. Its host may block reading it; try Start capture instead.'));
+  useVideoElement(v);
+}
+
+$('load').onclick = () => {
+  const src = parseSource($('url').value);
+  if (!src) return status('Could not recognise that link. Paste a YouTube, Twitch or direct video URL.');
+  src.type === 'direct' ? loadDirect(src.src) : loadEmbed(src);
+};
+$('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('load').click(); });
+$('fileBtn').onclick = () => $('file').click();
+$('file').onchange = () => { const f = $('file').files[0]; if (f) loadDirect(URL.createObjectURL(f)); };
+
+// ---------- Screen capture: the only way a page can read pixels from a YouTube/Twitch embed ----------
+async function startCapture() {
+  if (!navigator.mediaDevices?.getDisplayMedia) return status('This browser cannot capture a tab. Try desktop Chrome, Edge or Firefox.');
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser', frameRate: 30, width: { ideal: 3840 }, height: { ideal: 2160 } },
+      audio: false, preferCurrentTab: true, selfBrowserSurface: 'include',
+    });
+  } catch { return status('Capture was cancelled.'); }
+  const track = stream.getVideoTracks()[0];
+  S.cropped = false;
+  // Region Capture (Chrome/Edge): crop the tab capture to just the video area.
+  if (window.CropTarget && track.cropTo && track.getSettings().displaySurface === 'browser') {
+    try { await track.cropTo(await CropTarget.fromElement(stage)); S.cropped = true; } catch { /* a different tab was picked */ }
+  }
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.srcObject = stream;
+  await v.play().catch(() => {});
+  S.video = v; S.kind = 'capture';
+  resetSpotting();
+  track.addEventListener('ended', () => stopCapture());
+  status(S.cropped ? 'Capturing the video. Watching for cards.'
+    : 'Capturing. If you picked another tab or window, boxes will be off: pick "this tab".');
+  updateButtons();
+}
+function stopCapture(quiet) {
+  if (S.kind !== 'capture') return;
+  S.video.srcObject?.getTracks().forEach((t) => t.stop());
+  S.video = null; S.kind = null; stopLive(); resetSpotting();
+  if (!quiet) status('Capture stopped.');
+  updateButtons();
+}
+$('capture').onclick = () => (S.kind === 'capture' ? stopCapture() : startCapture());
+
+function updateButtons() {
+  const ready = !!S.video;
+  $('capture').textContent = S.kind === 'capture' ? 'Stop capture' : 'Start capture';
+  $('capture').classList.toggle('on', S.kind === 'capture');
+  $('selectMode').disabled = !ready;
+  $('live').disabled = !ready || !currentRect();
+  if (!ready) setSelectMode(false);
+}
+
+// ---------- Geometry: stage <-> source video pixels ----------
+function frameInfo() {
+  const v = S.video;
+  return {
+    videoW: v.videoWidth, videoH: v.videoHeight, stageRect: stage.getBoundingClientRect(),
+    frame: S.kind === 'direct' ? 'contain' : S.cropped ? 'stage' : 'viewport',
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+  };
+}
+// The part of the source frame that shows the stage.
+function stageRegion() {
+  const f = frameInfo();
+  return Z.mapSelection({ ...f, sel: { x: 0, y: 0, w: 1, h: 1 } });
+}
+// Source pixel box -> CSS px relative to the stage (for drawing marks).
+function toStage(b) {
+  const { videoW: vw, videoH: vh, stageRect: r, frame } = frameInfo();
+  if (frame === 'stage') return { x: b.x / vw * r.width, y: b.y / vh * r.height, w: b.w / vw * r.width, h: b.h / vh * r.height };
+  if (frame === 'contain') {
+    const s = Math.min(r.width / vw, r.height / vh), ox = (r.width - vw * s) / 2, oy = (r.height - vh * s) / 2;
+    return { x: ox + b.x * s, y: oy + b.y * s, w: b.w * s, h: b.h * s };
+  }
+  const kx = vw / window.innerWidth, ky = vh / window.innerHeight;
+  return { x: b.x / kx - r.left, y: b.y / ky - r.top, w: b.w / kx, h: b.h / ky };
+}
+
+// What the zoom shows: a manual box, or the focused spotted card. Source pixels.
+function currentRect() {
+  if (!S.video || !S.video.videoWidth) return null;
+  if (S.manual) return Z.mapSelection({ ...frameInfo(), sel: S.manual });
+  const t = S.tracks.find((t) => t.id === S.focusId);
+  return t ? Z.clampRect(t.x, t.y, t.w, t.h, S.video.videoWidth, S.video.videoHeight) : null;
+}
+
+// ---------- Automatic spotting ----------
+const DETECT_MS = 350;
+setInterval(() => {
+  if (!S.auto || !S.video || !S.video.videoWidth || document.hidden) return;
+  const region = stageRegion();
+  if (!region) return;
+  let dets;
+  try { dets = D.detectCards(S.video, region); } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
+  S.tracks = tracker.update(dets);
+  chooseFocus();
+  renderMarks(); renderSpotted();
+  if (!S.manual) renderZoom(false);
+  maybeIdentify();
+}, DETECT_MS);
+
+function chooseFocus() {
+  const ids = new Set(S.tracks.map((t) => t.id));
+  if (S.pinnedId && !ids.has(S.pinnedId)) S.pinnedId = null;
+  const prev = S.focusId;
+  if (S.pinnedId) S.focusId = S.pinnedId;
+  else {
+    // Follow the biggest card: a card held up to the camera or zoomed by the streamer.
+    const best = S.tracks.slice().sort((a, b) => b.w * b.h - a.w * a.h)[0];
+    const cur = S.tracks.find((t) => t.id === prev);
+    // Stick with the current card unless another is clearly bigger, to avoid jumping around.
+    S.focusId = !best ? null : cur && cur.w * cur.h > best.w * best.h * 0.8 ? cur.id : best.id;
+  }
+  if (S.focusId !== prev && S.focusId && !S.manual) pushHistorySoon();
+}
+
+function renderMarks() {
+  marks.replaceChildren();
+  // Marks drawn over the stage would be captured into the frames we analyse, so only draw
+  // them when reading a <video> directly. During tab capture the "On screen" strip is the UI.
+  if (S.kind !== 'direct') return;
+  for (const t of S.tracks) {
+    const b = toStage(t);
+    const m = document.createElement('div');
+    m.className = 'mark' + (t.id === S.focusId ? ' focus' : '');
+    Object.assign(m.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
+    m.title = 'Show this card';
+    m.onclick = () => pin(t.id);
+    marks.appendChild(m);
+  }
+}
+
+const thumbs = new Map();
+function renderSpotted() {
+  const box = $('spotted');
+  $('spottedEmpty').hidden = S.tracks.length > 0;
+  for (const [id, c] of thumbs) if (!S.tracks.some((t) => t.id === id)) { c.remove(); thumbs.delete(id); }
+  for (const t of S.tracks) {
+    let c = thumbs.get(t.id);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.title = 'Show this card';
+      c.onclick = () => pin(t.id);
+      thumbs.set(t.id, c); box.appendChild(c);
+    }
+    c.classList.toggle('focus', t.id === S.focusId);
+    c.classList.toggle('pinned', t.id === S.pinnedId);
+    try {
+      Z.renderCrop(S.video, Z.clampRect(t.x, t.y, t.w, t.h, S.video.videoWidth, S.video.videoHeight), c,
+        { maxW: 120, maxH: 168, minScale: 0.1, sharpen: false, rotate: t.rotated && $('rotate').checked });
+    } catch { /* unreadable source */ }
+  }
+}
+
+function pin(id) {
+  S.manual = null;
+  S.pinnedId = S.pinnedId === id ? null : id;
+  S.focusId = id;
+  renderMarks(); renderSpotted(); renderZoom(true);
+  updateButtons();
+}
+
+function setAuto(on) {
+  S.auto = on;
+  $('auto').classList.toggle('on', on);
+  if (!on) resetSpotting();
+}
+$('auto').onclick = () => setAuto(!S.auto);
+
+// Auto identify: once a focused card has been steady for a few frames, OCR its name and look it up.
+let identifying = false;
+async function maybeIdentify() {
+  if (!$('autoId').checked || identifying || S.manual) return;
+  const t = S.tracks.find((t) => t.id === S.focusId);
+  if (!t || t.hits < 4 || S.identified.has(t.id) || zoom.hidden) return;
+  S.identified.add(t.id);
+  identifying = true;
+  try { await identify(true); } finally { identifying = false; }
+}
+
+// ---------- Manual picking (fallback) ----------
+let selecting = false;
+function setSelectMode(on) {
+  selecting = on && !!S.video;
+  overlay.classList.toggle('active', selecting);
+  $('selectMode').classList.toggle('on', selecting);
+}
+$('selectMode').onclick = () => setSelectMode(!selecting);
+
+let drag = null;
+overlay.addEventListener('pointerdown', (e) => {
+  const r = stage.getBoundingClientRect();
+  drag = { x0: e.clientX - r.left, y0: e.clientY - r.top, r };
+  overlay.setPointerCapture(e.pointerId);
+  showBox(drag.x0, drag.y0, 0, 0);
+});
+overlay.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const x = e.clientX - drag.r.left, y = e.clientY - drag.r.top;
+  showBox(Math.min(x, drag.x0), Math.min(y, drag.y0), Math.abs(x - drag.x0), Math.abs(y - drag.y0));
+});
+overlay.addEventListener('pointerup', (e) => {
+  if (!drag) return;
+  const { r } = drag;
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let b = { x: Math.min(x, drag.x0), y: Math.min(y, drag.y0), w: Math.abs(x - drag.x0), h: Math.abs(y - drag.y0) };
+  drag = null;
+  if (b.w < 8 || b.h < 8) b = Z.clickToSelection(x, y, r.width, r.height);
+  b.x = Math.max(0, b.x); b.y = Math.max(0, b.y);
+  b.w = Math.min(b.w, r.width - b.x); b.h = Math.min(b.h, r.height - b.y);
+  S.manual = { x: b.x / r.width, y: b.y / r.height, w: b.w / r.width, h: b.h / r.height };
+  S.pinnedId = null;
+  // Hide the box before grabbing so it is not baked into the captured frame.
+  selbox.style.display = 'none';
+  setSelectMode(false);
+  requestAnimationFrame(() => requestAnimationFrame(() => { renderZoom(true); renderSpotted(); updateButtons(); }));
+});
+function showBox(x, y, w, h) {
+  Object.assign(selbox.style, { display: 'block', left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+}
+
+// ---------- Zoom panel ----------
+function renderZoom(addToHistory) {
+  const rect = currentRect();
+  if (!rect) {
+    if (!S.manual && !S.tracks.length) { zoom.hidden = true; $('zoomEmpty').hidden = false; $('full').disabled = $('readName').disabled = true; }
+    return;
+  }
+  const box = $('zoomBox').getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const t = S.manual ? null : S.tracks.find((t) => t.id === S.focusId);
+  const rotate = $('rotate').checked !== !!(t && t.rotated); // auto-rotate tapped cards upright
+  try {
+    Z.renderCrop(S.video, rect, zoom, {
+      maxW: box.width * dpr, maxH: box.height * dpr, rotate,
+      sharpen: $('sharpen').checked, contrast: $('contrast').checked,
+    });
+  } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
+  zoom.hidden = false; $('zoomEmpty').hidden = true;
+  $('full').disabled = false; $('readName').disabled = false;
+  if (addToHistory) pushHistory();
+  if (lbLive) drawLightboxZoom();
+}
+['sharpen', 'contrast', 'rotate'].forEach((id) => $(id).addEventListener('change', () => { renderZoom(false); renderSpotted(); }));
+
+let histTimer = 0;
+function pushHistorySoon() { clearTimeout(histTimer); histTimer = setTimeout(() => pushHistory(), 50); }
+function pushHistory() {
+  if (zoom.hidden) return;
+  let url;
+  try { url = zoom.toDataURL('image/jpeg', 0.85); } catch { return; }
+  S.history.unshift(url);
+  S.history = S.history.slice(0, 12);
+  const h = $('history');
+  h.replaceChildren(...S.history.map((u) => {
+    const im = new Image(); im.src = u; im.title = 'Open full size';
+    im.onclick = () => openLightboxImage(u, 'Saved crop');
+    return im;
+  }));
+  $('historySec').hidden = false;
+}
+
+// ---------- Live mode (re-render the zoom every frame, not just on each detection) ----------
+let raf = 0, lastT = 0;
+function liveLoop(t) {
+  if (!S.live) return;
+  if (t - lastT > 66) { renderZoom(false); lastT = t; }
+  raf = requestAnimationFrame(liveLoop);
+}
+function startLive() { if (!currentRect()) return; S.live = true; $('live').classList.add('on'); raf = requestAnimationFrame(liveLoop); }
+function stopLive() { S.live = false; cancelAnimationFrame(raf); $('live').classList.remove('on'); }
+$('live').onclick = () => (S.live ? stopLive() : startLive());
+
+// ---------- Lightbox ----------
+let lbLive = false;
+const lbCanvas = document.createElement('canvas');
+function openLightboxImage(src, cap) {
+  lbLive = false;
+  const im = new Image(); im.src = src; im.alt = cap || '';
+  $('lbContent').replaceChildren(im);
+  $('lbCap').textContent = cap || '';
+  $('lightbox').classList.add('open');
+}
+function drawLightboxZoom() {
+  lbCanvas.width = zoom.width; lbCanvas.height = zoom.height;
+  lbCanvas.getContext('2d').drawImage(zoom, 0, 0);
+}
+function openLightboxZoom() {
+  if (zoom.hidden) return;
+  lbLive = true; drawLightboxZoom();
+  $('lbContent').replaceChildren(lbCanvas);
+  $('lbCap').textContent = 'Click or press Esc to close.';
+  $('lightbox').classList.add('open');
+}
+function closeLightbox() { $('lightbox').classList.remove('open'); lbLive = false; }
+$('lightbox').onclick = closeLightbox;
+$('zoomBox').onclick = openLightboxZoom;
+$('full').onclick = openLightboxZoom;
+
+// ---------- Keyboard ----------
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input, select, textarea')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'escape') { closeLightbox(); setSelectMode(false); }
+  else if (k === 'z' && S.video) setSelectMode(!selecting);
+  else if (k === 'a') setAuto(!S.auto);
+  else if (k === 'l' && !$('live').disabled) $('live').click();
+  else if (k === 'f') ($('lightbox').classList.contains('open') ? closeLightbox() : openLightboxZoom());
+});
+window.addEventListener('resize', () => { if (!S.live) { renderZoom(false); renderMarks(); } });
+
+// ---------- Lookup ----------
+async function runLookup(q) {
+  q = q.trim();
+  if (!q) return;
+  const game = $('game').value;
+  const keys = game === 'all' ? Object.keys(L.GAMES) : [game];
+  $('lookupMsg').textContent = `Searching ${keys.map((k) => L.GAMES[k].label).join(', ')}…`;
+  $('results').replaceChildren();
+  const { results, failed } = await L.searchCards(q, keys);
+  $('results').replaceChildren(...results.map((c) => {
+    const el = document.createElement('div'); el.className = 'card';
+    el.innerHTML = '<img loading="lazy" alt=""><span class="badge"></span><div class="name"></div>';
+    el.querySelector('img').src = c.img;
+    el.querySelector('img').alt = c.name;
+    el.querySelector('.badge').textContent = L.GAMES[c.game].label;
+    el.querySelector('.name').textContent = c.set ? `${c.name} · ${c.set}` : c.name;
+    el.onclick = () => openLightboxImage(c.big || c.img, c.set ? `${c.name} (${c.set})` : c.name);
+    return el;
+  }));
+  const msg = $('lookupMsg');
+  msg.textContent = (results.length ? `${results.length} result${results.length > 1 ? 's' : ''} for "${q}". ` : `No matches for "${q}". `) +
+    (failed.length ? `Couldn't reach ${failed.map((k) => L.GAMES[k].label).join(', ')}. ` : '');
+  const a = document.createElement('a');
+  a.href = L.otherGamesUrl(q); a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Search TCGplayer';
+  msg.append(a, ' for other games.');
+}
+$('lookupForm').onsubmit = (e) => { e.preventDefault(); runLookup($('q').value); };
+
+async function identify(auto) {
+  if (zoom.hidden) return;
+  const btn = $('readName'); btn.disabled = true; btn.textContent = 'Reading…';
+  try {
+    const name = await O.readCardName(zoom);
+    if (!name) { if (!auto) $('lookupMsg').textContent = "Couldn't read a name. Try a tighter box around the card, or type it."; return; }
+    $('q').value = name;
+    await runLookup(name);
+  } catch (e) {
+    $('lookupMsg').textContent = e.message || 'Reading failed.';
+  } finally { btn.disabled = false; btn.textContent = 'Read name'; }
+}
+$('readName').onclick = () => identify(false);
+
+// ---------- Demo table for trying it without a stream (?demo) ----------
+if (new URLSearchParams(location.search).has('demo')) {
+  const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+  const g = c.getContext('2d');
+  const cards = [['Lightning Bolt', '#b03a2e', 260, 250, 0], ['Pikachu', '#d4ac0d', 520, 250, 0], ['Dark Magician', '#7d3c98', 800, 300, 1]];
+  let f = 0;
+  (function draw() {
+    g.fillStyle = '#1d5c3a'; g.fillRect(0, 0, 1280, 720);
+    cards.forEach(([n, col, x0, y0, tapped], i) => {
+      const y = y0 + Math.sin((f + i * 20) / 30) * 6;
+      g.save(); g.translate(x0, y);
+      if (tapped) { g.translate(214, 0); g.rotate(Math.PI / 2); }
+      g.fillStyle = '#111'; g.fillRect(-4, -4, 160, 222);
+      g.fillStyle = col; g.fillRect(0, 0, 152, 214);
+      g.fillStyle = '#f5f0e6'; g.fillRect(8, 8, 136, 22);
+      g.fillStyle = '#111'; g.font = 'bold 14px serif'; g.fillText(n, 12, 24);
+      g.fillStyle = '#ddd'; g.fillRect(8, 36, 136, 90);
+      g.fillStyle = '#f5f0e6'; g.fillRect(8, 134, 136, 70);
+      g.restore();
+    });
+    f++; requestAnimationFrame(draw);
+  })();
+  clearStage();
+  const v = document.createElement('video');
+  v.muted = true; v.autoplay = true; v.playsInline = true;
+  v.srcObject = c.captureStream(30);
+  useVideoElement(v);
+  v.play();
+  status('Demo table loaded. Watching for cards.');
+}
+})();
+
+</script>
+<script>
+// If the script files next to this page didn't load (page opened on its own), say so instead of doing nothing.
+if (!window.CardZoom) {
+  document.getElementById('status').textContent = 'The page\'s script files are missing. Open card-zoom.html instead, or serve the whole folder.';
+  document.getElementById('load').onclick = () => alert('This copy of the page is missing its script files (core/ and web/). Open card-zoom.html, which has everything in one file.');
+}
+</script>
+
+</body>
+</html>
