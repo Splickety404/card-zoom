@@ -44,6 +44,10 @@ The zoom can only be as sharp as the stream: a card that is 60 px tall in a 1080
 
 Small cards: detection works down to about 3% of the video height. Their names are usually too small to read, so a tiny card can be spotted but not always identified; picking it with a name search, or clicking a result, still gets the crisp scan. Identifying by picture alone (no name) would need a prebuilt image index of every card, which is the natural next step.
 
+Webcam boxes and people can be card-shaped, so larger candidates must also show straight rules across their face (name bar, art box, text box) to count. If something still gets picked up, hover its box and press × (or **Not a card** in the zoom panel) and that area is ignored for the rest of the video.
+
+**Overlay**: every identified card is drawn on top of the video at its position and follows it as it moves; tapped cards are turned to match. Every couple of seconds each card is compared with how it looked when identified, and re-identified if it changed. During tab capture this needs Chrome 132+ (Element Capture), which leaves the page's own overlays out of the captured frames; on older browsers overlays are off and cards show in the side panel only. `O` toggles overlays.
+
 Known limits, honestly stated:
 - Tested only on synthetic tables (the demo and the sample video), because this build environment can't reach YouTube, Twitch or the card APIs. Real streams with overlays, glare or sleeves will need tuning.
 - Cards that touch or overlap can merge into one box, or be missed.

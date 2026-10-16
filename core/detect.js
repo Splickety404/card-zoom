@@ -1,7 +1,7 @@
 // Card Zoom core: finds card-shaped rectangles in a video frame, with no ML model or library.
 // Method: Sobel edges on a frame scaled to 800 px wide -> connected edge blobs -> keep blobs whose bounding
-// box has a trading card's proportions (63x88 mm, upright or tapped) and whose four sides are
-// mostly edge pixels. A tracker smooths results across frames so boxes don't flicker.
+// box has a trading card's proportions (63x88 mm, upright or tapped), whose four sides are
+// mostly edge pixels, and which has straight rules across its face (name bar, art box, text box). A tracker smooths results across frames so boxes don't flicker.
 // Exposes window.CardZoom.detect.
 (function (root) {
   'use strict';
@@ -21,7 +21,7 @@
     const {
       analysisWidth = 800, minHeightFrac = 0.03, maxHeightFrac = 0.95,
       aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
-      minSideEdge = 0.4, minMeanSideEdge = 0.6,
+      minSideEdge = 0.5, minMeanSideEdge = 0.7, minInnerLines = 2,
     } = opts;
     const W = Math.min(analysisWidth, Math.round(region.w)), H = Math.round(region.h * W / region.w);
     if (W < 32 || H < 32) return [];
@@ -100,6 +100,24 @@
       return hit / len;
     };
 
+    // Counts straight edge lines running across the card's short side, inside its border
+    // (rows for an upright card, columns for a tapped one). Adjacent hits count as one line.
+    const innerLines = (x0, y0, w, h, tapped) => {
+      const along = tapped ? w : h, across = tapped ? h : w;
+      const a0 = Math.round(along * 0.06), a1 = Math.round(along * 0.94);
+      const c0 = Math.round(across * 0.12), c1 = Math.round(across * 0.88), span = c1 - c0;
+      let lines = 0, prev = -9;
+      for (let a = a0; a < a1; a++) {
+        let hit = 0;
+        for (let c = c0; c < c1; c++) {
+          const x = tapped ? x0 + a : x0 + c, y = tapped ? y0 + c : y0 + a;
+          hit += edge[y * W + x];
+        }
+        if (hit / span >= 0.65) { if (a - prev > 2) lines++; prev = a; }
+      }
+      return lines;
+    };
+
     // A box passes if it has card proportions and edges along all four sides.
     const testBox = (x0, y0, w, h) => {
       x0 = Math.round(x0); y0 = Math.round(y0); w = Math.round(w); h = Math.round(h);
@@ -109,6 +127,11 @@
       const sides = [sideScore(x0, y0, x1, y0), sideScore(x0, y1, x1, y1), sideScore(x0, y0, x0, y1), sideScore(x1, y0, x1, y1)];
       const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
       if (Math.min(...sides) < minSideEdge || mean < minMeanSideEdge) return null;
+      // Webcam boxes and people can be card-shaped; card faces aren't like them inside. Every TCG
+      // layout has straight rules across the card (name bar, art box, text box), so require some.
+      // Cards under ~60 analysis px (about 13% of the frame height) are too small to check.
+      const lines = long >= 60 ? innerLines(x0, y0, w, h, w > h) : minInnerLines;
+      if (lines < minInnerLines) return null;
       return { x0, y0, w, h, score: mean * (1 - aspectErr), rotated: w > h };
     };
 
@@ -186,6 +209,7 @@
         return this.visible();
       },
       visible() { return tracks.filter((t) => t.hits >= confirm); },
+      remove(id) { tracks = tracks.filter((t) => t.id !== id); },
       reset() { tracks = []; },
     };
   }

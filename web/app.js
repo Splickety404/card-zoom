@@ -5,14 +5,18 @@
 'use strict';
 const { zoom: Z, detect: D, lookup: L, ocr: O, match: M } = window.CardZoom;
 const $ = (id) => document.getElementById(id);
-const stage = $('stage'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
+const stage = $('stage'), media = $('media'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
 const zoom = $('zoom');
 
 const S = {
   embed: null,        // iframe for a YouTube/Twitch embed
   video: null,        // <video> whose frames we can read (direct video, or the capture stream)
   kind: null,         // 'direct' | 'capture'
-  cropped: false,     // capture track cropped to #stage via Region Capture
+  cropped: false,     // capture track cropped to the video area (Region or Element Capture)
+  restricted: false,  // Element Capture: our own overlays are left out of the captured frames
+  overlay: true,      // draw identified cards over the video
+  excluded: [],       // areas the viewer marked "Not a card", as stage fractions {x,y,w,h}
+  checkTick: 0,
   auto: true,         // automatic card spotting on
   tracks: [],         // cards currently spotted (source pixel boxes with stable ids)
   focusId: null,      // track shown in the zoom
@@ -50,7 +54,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear(); S.ids.clear();
+  tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear(); S.ids.clear(); S.excluded = [];
   renderSpotted(); renderMarks();
 }
 
@@ -81,7 +85,7 @@ function loadEmbed(src) {
       : `https://player.twitch.tv/?channel=${encodeURIComponent(src.channel)}`;
     f.src = `${base}&parent=${encodeURIComponent(parent)}&autoplay=true`;
   }
-  stage.insertBefore(f, marks);
+  media.appendChild(f);
   S.embed = f;
   if (location.protocol === 'file:') status('Embeds need the page served from a web server (see README). "Open video file" works without one.');
   else status(S.kind === 'capture' ? 'Capturing. Watching for cards.' : 'Press "Start capture" and choose this tab so the page can see the video.');
@@ -90,7 +94,7 @@ function loadEmbed(src) {
 
 function useVideoElement(v) {
   v.className = 'src';
-  stage.insertBefore(v, marks);
+  media.appendChild(v);
   if (S.kind === 'capture') stopCapture(true);
   S.video = v; S.kind = 'direct';
   updateButtons();
@@ -130,10 +134,16 @@ async function startCapture() {
     });
   } catch { return status('Capture was cancelled.'); }
   const track = stream.getVideoTracks()[0];
-  S.cropped = false;
-  // Region Capture (Chrome/Edge): crop the tab capture to just the video area.
-  if (window.CropTarget && track.cropTo && track.getSettings().displaySurface === 'browser') {
-    try { await track.cropTo(await CropTarget.fromElement(stage)); S.cropped = true; } catch { /* a different tab was picked */ }
+  S.cropped = S.restricted = false;
+  const self = track.getSettings().displaySurface === 'browser';
+  // Element Capture (Chrome 132+): capture only the video element, so overlays drawn on top of
+  // it never end up in the frames we analyse. Region Capture (older Chrome/Edge) crops the same
+  // area but includes anything on top, so overlays are switched off there.
+  if (self && window.RestrictionTarget && track.restrictTo) {
+    try { await track.restrictTo(await RestrictionTarget.fromElement(media)); S.cropped = S.restricted = true; } catch { /* a different tab was picked */ }
+  }
+  if (self && !S.cropped && window.CropTarget && track.cropTo) {
+    try { await track.cropTo(await CropTarget.fromElement(media)); S.cropped = true; } catch { /* a different tab was picked */ }
   }
   const v = document.createElement('video');
   v.muted = true; v.playsInline = true; v.srcObject = stream;
@@ -141,7 +151,8 @@ async function startCapture() {
   S.video = v; S.kind = 'capture';
   resetSpotting();
   track.addEventListener('ended', () => stopCapture());
-  status(S.cropped ? `Capturing the video (${v.videoWidth}×${v.videoHeight}). Watching for cards.`
+  status(S.restricted ? `Capturing the video (${v.videoWidth}×${v.videoHeight}). Watching for cards.`
+    : S.cropped ? 'Capturing. On-video overlays need Chrome 132 or newer; cards still show in the side panel.'
     : 'Capturing. If you picked another tab or window, boxes will be off: pick "this tab".');
   updateButtons();
 }
@@ -212,13 +223,47 @@ setInterval(() => {
   let dets;
   const debug = $('dbg').checked;
   try { dets = D.detectCards(S.video, region, { debug }); } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
-  S.tracks = tracker.update(dets);
+  const kept = dets.filter((d) => !isExcluded(d, region));
+  S.tracks = tracker.update(kept);
   if (debug) drawDebug(dets.debug);
+  if (++S.checkTick % 6 === 0) recheckIdentities();
   chooseFocus();
   renderMarks(); renderSpotted();
   if (!S.manual) renderZoom(false);
   maybeIdentify();
 }, DETECT_MS);
+
+// ---------- "Not a card" ----------
+function toFrac(b, region) { return { x: (b.x - region.x) / region.w, y: (b.y - region.y) / region.h, w: b.w / region.w, h: b.h / region.h }; }
+function isExcluded(d, region) {
+  const f = toFrac(d, region), cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  return S.excluded.some((e) => cx > e.x && cx < e.x + e.w && cy > e.y && cy < e.y + e.h);
+}
+function rejectTrack(id) {
+  const t = S.tracks.find((t) => t.id === id), region = stageRegion();
+  if (!t || !region) return;
+  // Ignore a generous area around it: a person in a webcam box moves around inside it.
+  const f = toFrac(t, region), pad = 0.5;
+  S.excluded.push({ x: f.x - f.w * pad, y: f.y - f.h * pad, w: f.w * (1 + 2 * pad), h: f.h * (1 + 2 * pad) });
+  tracker.remove(id); S.tracks = S.tracks.filter((t) => t.id !== id); S.ids.delete(id);
+  if (S.pinnedId === id) S.pinnedId = null;
+  chooseFocus(); renderMarks(); renderSpotted(); renderZoom(false); updateZoomView();
+  status('Got it. That area is ignored until you load another video.');
+}
+$('notCard').onclick = (e) => { e.stopPropagation(); if (S.focusId != null && !S.manual) rejectTrack(S.focusId); };
+
+// A card swapped for another in the same spot keeps its box: every couple of seconds, compare
+// each identified card with how it looked when identified, and identify it again if it changed.
+function recheckIdentities() {
+  for (const t of S.tracks) {
+    const id = S.ids.get(t.id);
+    if (!id || !id.sig || id.picked) continue;
+    try {
+      const now = M.signature(S.video, t.x, t.y, t.w, t.h);
+      if (M.similarity(now, id.sig) < 0.6) { S.ids.delete(t.id); S.identified.delete(t.id); }
+    } catch { /* unreadable */ }
+  }
+}
 
 // Detector view: edge map in grey, blobs considered in blue, accepted cards in yellow.
 function drawDebug(d) {
@@ -254,21 +299,44 @@ function chooseFocus() {
   if (S.focusId !== prev && S.focusId && !S.manual) pushHistorySoon();
 }
 
-function renderMarks() {
-  marks.replaceChildren();
-  // Marks drawn over the stage would be captured into the frames we analyse, so only draw
-  // them when reading a <video> directly. During tab capture the "On screen" strip is the UI.
-  if (S.kind !== 'direct') return;
-  for (const t of S.tracks) {
-    const b = toStage(t);
-    const m = document.createElement('div');
-    m.className = 'mark' + (t.id === S.focusId ? ' focus' : '');
-    Object.assign(m.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
-    m.title = 'Show this card';
-    m.onclick = () => pin(t.id);
-    marks.appendChild(m);
-  }
+// Boxes and card overlays on the video. They are safe to draw only when they can't leak into
+// the frames we analyse: a direct <video>, or a tab capture restricted to the video element.
+const marksById = new Map();
+function confidentCard(id) {
+  const c = id && id.card;
+  return c && (id.picked || id.forced || typeof c.match !== 'number' || c.match >= 0.5) ? c : null;
 }
+function renderMarks() {
+  const safe = S.kind === 'direct' || (S.kind === 'capture' && S.restricted);
+  const live = new Set();
+  if (safe) for (const t of S.tracks) {
+    live.add(t.id);
+    let m = marksById.get(t.id);
+    if (!m) {
+      m = document.createElement('div');
+      m.innerHTML = '<img alt="" draggable="false"><button class="nc" title="Not a card">×</button>';
+      m.onclick = () => pin(t.id);
+      m.querySelector('.nc').onclick = (e) => { e.stopPropagation(); rejectTrack(t.id); };
+      marks.appendChild(m); marksById.set(t.id, m);
+    }
+    const b = toStage(t), card = S.overlay ? confidentCard(S.ids.get(t.id)) : null;
+    m.className = 'mark' + (t.id === S.focusId ? ' focus' : '') + (card ? ' has-card' : '');
+    m.title = card ? `${card.name}${card.set ? ' (' + card.set + ')' : ''}` : 'Show this card';
+    Object.assign(m.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
+    const img = m.firstChild;
+    if (card) {
+      const src = card.big || card.img;
+      if (img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
+      // Tapped cards: draw the upright scan turned 90 degrees to sit in the landscape box.
+      const sw = t.rotated ? b.h : b.w, sh = t.rotated ? b.w : b.h;
+      Object.assign(img.style, { display: 'block', width: sw + 'px', height: sh + 'px',
+        left: (b.w - sw) / 2 + 'px', top: (b.h - sh) / 2 + 'px', transform: t.rotated ? 'rotate(90deg)' : '' });
+    } else img.style.display = 'none';
+  }
+  for (const [id, m] of marksById) if (!live.has(id)) { m.remove(); marksById.delete(id); }
+}
+function setOverlay(on) { S.overlay = on; $('overlayBtn').classList.toggle('on', on); renderMarks(); }
+$('overlayBtn').onclick = () => setOverlay(!S.overlay);
 
 const thumbs = new Map();
 function renderSpotted() {
@@ -300,7 +368,7 @@ function pin(id) {
   S.focusId = id;
   renderMarks(); renderSpotted(); renderZoom(true);
   updateButtons();
-  if ($('autoId').checked && !identifying && !S.ids.has(id) && !S.identified.has(id)) { S.identified.add(id); identify(true); }
+  if ($('autoId').checked && !identifying && !S.ids.has(id) && !S.identified.has(id)) { S.identified.add(id); identify(true, id); }
 }
 
 function setAuto(on) {
@@ -310,14 +378,17 @@ function setAuto(on) {
 }
 $('auto').onclick = () => setAuto(!S.auto);
 
-// Auto identify: once a focused card has been steady for a few frames, OCR its name and look it up.
+// Auto identify: every card that has been steady for a few frames gets its name read and looked
+// up, one at a time, the zoomed card first and then the biggest.
 let identifying = false;
 async function maybeIdentify() {
-  if (!$('autoId').checked || identifying || S.manual) return;
-  const t = S.tracks.find((t) => t.id === S.focusId);
-  if (!t || t.hits < 4 || S.identified.has(t.id) || zoom.hidden) return;
+  if (!$('autoId').checked || identifying) return;
+  const ready = S.tracks.filter((t) => t.hits >= 4 && !S.identified.has(t.id))
+    .sort((a, b) => (b.id === S.focusId) - (a.id === S.focusId) || b.w * b.h - a.w * a.h);
+  const t = ready[0];
+  if (!t || (t.id === S.focusId && S.manual)) return;
   S.identified.add(t.id);
-  await identify(true);
+  await identify(true, t.id);
 }
 
 // ---------- Manual picking (fallback) ----------
@@ -481,6 +552,7 @@ document.addEventListener('keydown', (e) => {
   if (k === 'escape') { closeLightbox(); setSelectMode(false); }
   else if (k === 'z' && S.video) setSelectMode(!selecting);
   else if (k === 'a') setAuto(!S.auto);
+  else if (k === 'o') setOverlay(!S.overlay);
   else if (k === 'l' && !$('live').disabled) $('live').click();
   else if (k === 'f') ($('lightbox').classList.contains('open') ? closeLightbox() : openLightboxZoom());
 });
@@ -525,30 +597,49 @@ function renderResults(results) {
 }
 $('lookupForm').onsubmit = (e) => { e.preventDefault(); runLookup($('q').value); };
 
-async function identify(auto) {
-  if (zoom.hidden) return;
-  const key = currentKey();
-  // Work on a copy: the live zoom keeps changing while OCR and lookups run.
-  const crop = document.createElement('canvas');
-  crop.width = zoom.width; crop.height = zoom.height;
-  crop.getContext('2d').drawImage(zoom, 0, 0);
-  const btn = $('readName'); btn.disabled = true; btn.textContent = 'Reading…';
-  identifying = true; updateZoomView();
+// Identifies one card: a spotted card by track id, or (no id) whatever the zoom shows.
+// Only the zoomed card updates the search box and results; others are looked up quietly.
+async function identify(auto, trackId) {
+  let key, crop;
+  if (trackId != null) {
+    const t = S.tracks.find((t) => t.id === trackId);
+    if (!t || !S.video) return;
+    key = trackId;
+    crop = document.createElement('canvas');
+    try {
+      Z.renderCrop(S.video, Z.clampRect(t.x, t.y, t.w, t.h, S.video.videoWidth, S.video.videoHeight), crop,
+        { maxW: 600, maxH: 840, minScale: 1, rotate: t.rotated, sharpen: true });
+    } catch { return; }
+  } else {
+    if (zoom.hidden) return;
+    key = currentKey();
+    // Work on a copy: the live zoom keeps changing while OCR and lookups run.
+    crop = document.createElement('canvas');
+    crop.width = zoom.width; crop.height = zoom.height;
+    crop.getContext('2d').drawImage(zoom, 0, 0);
+  }
+  const t0 = S.tracks.find((t) => t.id === key);
+  const sig = t0 ? M.signature(S.video, t0.x, t0.y, t0.w, t0.h) : null;
+  const shown = () => key === currentKey();
+  const btn = $('readName');
+  identifying = true;
+  if (shown()) { btn.disabled = true; btn.textContent = 'Reading…'; updateZoomView(); }
   try {
     const name = await O.readCardName(crop);
     if (!name) { if (!auto) $('lookupMsg').textContent = "Couldn't read a name. Try a tighter box around the card, or type it."; return; }
-    $('q').value = name;
-    const results = await runLookup(name);
+    let results;
+    if (shown()) { $('q').value = name; results = await runLookup(name); }
+    else results = (await L.searchCards(name)).results;
     if (!results.length) return;
     const ranked = await M.rankByLook(crop, results);
-    renderResults(ranked);
-    if (key != null) S.ids.set(key, { card: ranked[0], ranked });
+    if (shown()) renderResults(ranked);
+    if (key != null) S.ids.set(key, { card: ranked[0], ranked, sig });
   } catch (e) {
-    $('lookupMsg').textContent = e.message || 'Reading failed.';
+    if (shown()) $('lookupMsg').textContent = e.message || 'Reading failed.';
   } finally {
     identifying = false;
-    btn.disabled = false; btn.textContent = 'Read name';
-    updateZoomView(); renderSpotted();
+    btn.disabled = zoom.hidden; btn.textContent = 'Read name';
+    updateZoomView(); renderSpotted(); renderMarks();
   }
 }
 $('readName').onclick = () => identify(false);

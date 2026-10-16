@@ -47,8 +47,17 @@ main { flex: 1; display: flex; min-height: 0; }
 #overlay { position: absolute; inset: 0; cursor: crosshair; display: none; }
 #overlay.active { display: block; background: rgba(124,156,255,.06); outline: 2px dashed var(--accent); outline-offset: -2px; }
 #marks { position: absolute; inset: 0; pointer-events: none; }
-.mark { position: absolute; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; cursor: pointer; }
+.mark { position: absolute; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; cursor: pointer;
+  transition: left .3s linear, top .3s linear, width .3s linear, height .3s linear; }
 .mark.focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,156,255,.4); }
+.mark.has-card { border-color: transparent; }
+.mark.has-card.focus { border-color: var(--accent); }
+.mark img { position: absolute; display: none; border-radius: 4.5% / 3.2%; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; }
+.mark .nc { position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 16px;
+  background: var(--panel); color: var(--text); display: none; z-index: 1; }
+.mark:hover .nc { display: block; }
+#media { position: absolute; inset: 0; isolation: isolate; transform-style: flat; }
+@media (prefers-reduced-motion: reduce) { .mark { transition: none; } }
 #spotted { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; min-height: 40px; align-items: flex-start; }
 #spotted canvas { height: 84px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; flex: none; }
 #spotted canvas.focus { border-color: var(--accent); }
@@ -61,7 +70,7 @@ button.nudge { background: var(--accent-2); border-color: var(--accent-2); color
 
 aside { width: 420px; max-width: 45vw; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 section { padding: 12px; border-bottom: 1px solid var(--line); }
-section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 section h2 .grow { flex: 1; }
 #zoomBox { background: #000; border-radius: 6px; aspect-ratio: 63 / 88; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
 #zoom { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
@@ -113,6 +122,7 @@ section h2 .grow { flex: 1; }
       <button id="capture" title="Let the page read the pixels of the stream (needed for YouTube and Twitch)">Start capture</button>
       <span class="sep"></span>
       <button id="auto" class="on" title="Find cards in the video automatically">Auto spot <kbd>A</kbd></button>
+      <button id="overlayBtn" class="on" title="Show identified cards on top of the video">Overlay <kbd>O</kbd></button>
       <button id="selectMode" disabled title="Drag over a card in the video yourself">Pick manually <kbd>Z</kbd></button>
       <button id="live" disabled title="Keep updating the zoom from the live video">Live <kbd>L</kbd></button>
       <span id="status">Load a stream to begin.</span>
@@ -123,6 +133,7 @@ section h2 .grow { flex: 1; }
           <div style="font-size:15px;color:#e8eaef">Paste a stream link above</div>
           <div>YouTube and Twitch links (live or VOD) play here. Then press <b>Start capture</b> and choose <b>this tab</b>. Cards on screen are spotted automatically.</div>
         </div>
+        <div id="media"></div>
         <div id="marks"></div>
         <div id="overlay"><div id="selbox"></div></div>
       </div>
@@ -131,7 +142,7 @@ section h2 .grow { flex: 1; }
 
   <aside>
     <section>
-      <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
+      <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="notCard" title="This isn't a card: ignore this area">Not a card</button><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
       <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
  <div id="zoomCap" class="hint"></div>
       <div class="row">
