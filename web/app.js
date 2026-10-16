@@ -139,7 +139,7 @@ async function startCapture() {
   S.video = v; S.kind = 'capture';
   resetSpotting();
   track.addEventListener('ended', () => stopCapture());
-  status(S.cropped ? 'Capturing the video. Watching for cards.'
+  status(S.cropped ? `Capturing the video (${v.videoWidth}×${v.videoHeight}). Watching for cards.`
     : 'Capturing. If you picked another tab or window, boxes will be off: pick "this tab".');
   updateButtons();
 }
@@ -156,6 +156,12 @@ function updateButtons() {
   const ready = !!S.video;
   $('capture').textContent = S.kind === 'capture' ? 'Stop capture' : 'Start capture';
   $('capture').classList.toggle('on', S.kind === 'capture');
+  // With an embed, nothing can be spotted until the viewer shares the tab: make that the obvious next step.
+  const needCapture = !!S.embed && S.kind !== 'capture';
+  $('capture').classList.toggle('nudge', needCapture);
+  $('spottedEmpty').textContent = needCapture
+    ? 'Press Start capture and choose "This tab" so the page can see the video.'
+    : ready ? 'Watching for cards…' : 'No cards spotted yet.';
   $('selectMode').disabled = !ready;
   $('live').disabled = !ready || !currentRect();
   if (!ready) setSelectMode(false);
@@ -202,13 +208,34 @@ setInterval(() => {
   const region = stageRegion();
   if (!region) return;
   let dets;
-  try { dets = D.detectCards(S.video, region); } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
+  const debug = $('dbg').checked;
+  try { dets = D.detectCards(S.video, region, { debug }); } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
   S.tracks = tracker.update(dets);
+  if (debug) drawDebug(dets.debug);
   chooseFocus();
   renderMarks(); renderSpotted();
   if (!S.manual) renderZoom(false);
   maybeIdentify();
 }, DETECT_MS);
+
+// Detector view: edge map in grey, blobs considered in blue, accepted cards in yellow.
+function drawDebug(d) {
+  const c = $('dbgView');
+  c.width = d.W; c.height = d.H;
+  const ctx = c.getContext('2d'), img = ctx.createImageData(d.W, d.H);
+  for (let i = 0; i < d.edge.length; i++) {
+    const v = d.edge[i] ? 200 : 20;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#4da3ff'; d.blobs.forEach((b) => ctx.strokeRect(b.x0 + 0.5, b.y0 + 0.5, b.w, b.h));
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffd166'; d.kept.forEach((b) => ctx.strokeRect(b.x0, b.y0, b.w, b.h));
+  ctx.fillStyle = '#fff'; ctx.font = '11px sans-serif';
+  ctx.fillText(`${S.video.videoWidth}×${S.video.videoHeight} ${S.kind}${S.cropped ? ' cropped' : ''} · ${d.kept.length} cards`, 4, 12);
+}
+$('dbg').addEventListener('change', () => { $('dbgView').hidden = !$('dbg').checked; });
 
 function chooseFocus() {
   const ids = new Set(S.tracks.map((t) => t.id));

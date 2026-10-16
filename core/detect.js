@@ -19,8 +19,9 @@
     const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: sw, h: sh };
     const {
-      analysisWidth = 480, minHeightFrac = 0.07, maxHeightFrac = 0.95,
-      aspectTolerance = 0.16, minSideEdge = 0.4, minMeanSideEdge = 0.6,
+      analysisWidth = 480, minHeightFrac = 0.05, maxHeightFrac = 0.95,
+      aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
+      minSideEdge = 0.4, minMeanSideEdge = 0.6,
     } = opts;
     const W = Math.min(analysisWidth, Math.round(region.w)), H = Math.round(region.h * W / region.w);
     if (W < 32 || H < 32) return [];
@@ -99,19 +100,41 @@
       return hit / len;
     };
 
+    // A box passes if it has card proportions and edges along all four sides.
+    const testBox = (x0, y0, w, h) => {
+      x0 = Math.round(x0); y0 = Math.round(y0); w = Math.round(w); h = Math.round(h);
+      const long = Math.max(w, h), aspectErr = Math.abs(Math.min(w, h) / long - CARD) / CARD;
+      if (long < H * minHeightFrac || long > H * maxHeightFrac || aspectErr > aspectTolerance) return null;
+      const x1 = x0 + w - 1, y1 = y0 + h - 1;
+      const sides = [sideScore(x0, y0, x1, y0), sideScore(x0, y1, x1, y1), sideScore(x0, y0, x0, y1), sideScore(x1, y0, x1, y1)];
+      const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
+      if (Math.min(...sides) < minSideEdge || mean < minMeanSideEdge) return null;
+      return { x0, y0, w, h, score: mean * (1 - aspectErr), rotated: w > h };
+    };
+
     let cands = [];
+    const debugBoxes = [];
     for (const b of boxes) {
       const w = b.x1 - b.x0 + 1, h = b.y1 - b.y0 + 1;
-      const short = Math.min(w, h), long = Math.max(w, h);
-      if (long < H * minHeightFrac || long > H * maxHeightFrac) continue;
-      const ratio = short / long;
-      const aspectErr = Math.abs(ratio - CARD) / CARD;
-      if (aspectErr > aspectTolerance) continue;
-      const sides = [sideScore(b.x0, b.y0, b.x1, b.y0), sideScore(b.x0, b.y1, b.x1, b.y1),
-        sideScore(b.x0, b.y0, b.x0, b.y1), sideScore(b.x1, b.y0, b.x1, b.y1)];
-      const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
-      if (Math.min(...sides) < minSideEdge || mean < minMeanSideEdge) continue;
-      cands.push({ x0: b.x0, y0: b.y0, w, h, score: mean * (1 - aspectErr), rotated: w > h });
+      if (Math.max(w, h) < H * minHeightFrac) continue;
+      if (opts.debug) debugBoxes.push({ x0: b.x0, y0: b.y0, w, h });
+      const whole = testBox(b.x0, b.y0, w, h);
+      if (whole) { cands.push(whole); continue; }
+      // Touching cards merge into one blob: try splitting it into a row or column of equal cards.
+      const splits = [
+        ['x', Math.round(w / (h * CARD))],  // upright cards side by side
+        ['x', Math.round(w * CARD / h)],    // tapped cards side by side
+        ['y', Math.round(h * CARD / w)],    // upright cards stacked
+      ];
+      for (const [axis, n] of splits) {
+        if (n < 2 || n > 10) continue;
+        const pieces = [];
+        for (let k = 0; k < n; k++) {
+          const c = axis === 'x' ? testBox(b.x0 + k * w / n, b.y0, w / n, h) : testBox(b.x0, b.y0 + k * h / n, w, h / n);
+          if (c) pieces.push(c);
+        }
+        if (pieces.length) { cands.push(...pieces); break; }
+      }
     }
 
     // Drop boxes inside a better or bigger box (e.g. a card's art frame inside the card).
@@ -122,9 +145,12 @@
       kept.push(c);
     }
     const kx = region.w / W, ky = region.h / H;
-    return kept.sort((a, b) => b.score - a.score).map((c) => ({
+    const out = kept.sort((a, b) => b.score - a.score).map((c) => ({
       x: region.x + c.x0 * kx, y: region.y + c.y0 * ky, w: c.w * kx, h: c.h * ky, score: c.score, rotated: c.rotated,
     }));
+    // opts.debug: attach the edge map and boxes (analysis pixels) so a page can show what was seen.
+    if (opts.debug) out.debug = { W, H, edge, blobs: debugBoxes, kept };
+    return out;
   }
 
   // Share of a's area covered by b (boxes as {x0,y0,w,h} or {x,y,w,h}).
