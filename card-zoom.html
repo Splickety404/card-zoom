@@ -1526,7 +1526,7 @@ async function maybeIdentify() {
   if (!$('autoId').checked) return;
   // Picture matching is fast and offline: try every steady card each tick. A card that doesn't
   // match (a non-card, or a bad frame) is retried a few times on later frames.
-  if (mtgIndex) {
+  if (hasPictureIndex()) {
     // Each card takes about a tenth of a second (it tries many placements), so spend a fixed
     // budget per tick: the zoomed card first, then the cards tried least so far.
     const until = performance.now() + 150;
@@ -1546,7 +1546,7 @@ async function maybeIdentify() {
   // Name reading only helps when the name is big enough to read, and runs one card at a time.
   const H = S.video.videoHeight;
   const ready = S.tracks.filter((t) => t.hits >= 4 && !S.identified.has(t.id) && !S.ids.has(t.id)
-      && (!mtgIndex || (S.pictureTries.get(t.id) || 0) >= 3) && Math.max(t.w, t.h) >= H * 0.25)
+      && (!hasPictureIndex() || (S.pictureTries.get(t.id) || 0) >= 3) && Math.max(t.w, t.h) >= H * 0.25)
     .sort((a, b) => (b.id === S.focusId) - (a.id === S.focusId) || b.w * b.h - a.w * a.h);
   const t = ready[0];
   if (!t || (t.id === S.focusId && S.manual)) return;
@@ -1554,13 +1554,24 @@ async function maybeIdentify() {
   await identify(true, t.id);
 }
 
-// ---------- Picture recognition (Magic) ----------
-// The index is built by .github/workflows/build-index.yml from Scryfall and served with the page.
-let mtgIndex = null, indexLoading = false;
+// ---------- Picture recognition ----------
+// One index per game, built by .github/workflows/build-index.yml from each game's card database
+// and served with the page. A game whose index is missing is simply not recognised by picture.
+const PICTURE_GAMES = ['mtg', 'pokemon', 'lorcana'];
+const pictureIndexes = {}, gameHits = {};
+let indexLoading = false;
 function loadPictureIndex() {
-  if (mtgIndex || indexLoading || !F) return;
+  if (indexLoading || !F) return;
   indexLoading = true;
-  F.loadIndex('data/mtg').then((ix) => { mtgIndex = ix; }).catch(() => { indexLoading = false; });
+  for (const g of PICTURE_GAMES) F.loadIndex('data/' + g).then((ix) => { pictureIndexes[g] = ix; gameHits[g] = 0; }).catch(() => {});
+}
+const hasPictureIndex = () => Object.keys(pictureIndexes).length > 0;
+// Games to try for a card: the one this stream has been matching, alone, once it is clear;
+// otherwise every game, most-matched first.
+function gamesToTry() {
+  const gs = Object.keys(pictureIndexes).sort((a, b) => gameHits[b] - gameHits[a]);
+  if (gs.length > 1 && gameHits[gs[0]] >= 3 && gameHits[gs[1]] === 0) return gs.slice(0, 1);
+  return gs;
 }
 // Accept a match only when it is close and clearly better than the next-best card.
 // The build's self-test picks the colour weight and distance cut-off and stores them in the index.
@@ -1569,28 +1580,37 @@ function loadPictureIndex() {
 // relative to the index's cut-off, since that scales with the colour weight the build picks.
 const STRONG_LEAD = 0.42, CLOSE_MATCH = 0.5;
 function identifyByPicture(t) {
-  const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
   // The trained detector gives the card's angle and size; the edge detector only an upright box.
   const o = t.obb, cx = o ? o.cx : t.x + t.w / 2, cy = o ? o.cy : t.y + t.h / 2;
   const cw = o ? o.cw : t.rotated ? t.h : t.w, ch = o ? o.ch : t.rotated ? t.w : t.h;
   const base = o ? o.angle : t.rotated ? 90 : 0;
-  let best;
-  try {
-    best = F.matchVariants(mtgIndex, (flip, angle, scale, dx, dy) =>
-      F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle),
-    info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
-  } catch { return false; }
-  if (best.d > maxDist || best.margin < minMargin) return false;
-  if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
-  const [name, set, num, sid] = mtgIndex.meta[best.i];
-  const path = `front/${sid[0]}/${sid[1]}/${sid}`;
-  const card = {
-    name, set: set.toUpperCase(), game: 'mtg',
-    img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
-    link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}`,
-  };
-  S.ids.set(t.id, { card, byPicture: true, dist: best.d, flip: best.variant.flip, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
-  return true;
+  for (const game of gamesToTry()) {
+    const ix = pictureIndexes[game], info = ix.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
+    let best;
+    try {
+      best = F.matchVariants(ix, (flip, angle, scale, dx, dy) =>
+        F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle),
+      info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
+    } catch { return false; }
+    if (best.d > maxDist || best.margin < minMargin) continue;
+    if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) continue;
+    gameHits[game]++;
+    S.ids.set(t.id, { card: pictureCard(game, ix.meta[best.i]), byPicture: true, dist: best.d, flip: best.variant.flip,
+      sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+    return true;
+  }
+  return false;
+}
+function pictureCard(game, row) {
+  if (game === 'mtg') {
+    // Magic rows hold the Scryfall id; image URLs follow from it.
+    const [name, set, num, sid] = row, path = `front/${sid[0]}/${sid[1]}/${sid}`;
+    return { name, set: set.toUpperCase(), game,
+      img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
+      link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}` };
+  }
+  const [name, set, num, img, big, link] = row;
+  return { name, set: String(set).toUpperCase(), game, img, big, link };
 }
 
 // ---------- Manual picking (fallback) ----------

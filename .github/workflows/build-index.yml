@@ -1,4 +1,4 @@
-name: Build card picture index
+name: Build card picture indexes
 
 on:
   workflow_dispatch:
@@ -18,20 +18,26 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install --no-save sharp@0.33.5
-      - run: node tools/build-index.mjs
+      # One index per game; a game whose database is down keeps last week's index.
+      - run: node tools/build-index.mjs mtg
+        continue-on-error: true
+      - run: node tools/build-index.mjs pokemon
+        continue-on-error: true
+      - run: node tools/build-index.mjs lorcana
+        continue-on-error: true
       - name: Commit index
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           git diff --cached --quiet && exit 0
-          git commit -m "Update Magic picture index"
+          git commit -m "Update card picture indexes"
           git pull --rebase origin main
           git push origin HEAD:main
