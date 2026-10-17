@@ -240,7 +240,7 @@
           if (best >= 0) {
             const d = dets[best]; used.add(best);
             for (const k of ['x', 'y', 'w', 'h']) tr[k] = tr[k] * smooth + d[k] * (1 - smooth);
-            tr.score = d.score; tr.rotated = d.rotated; tr.hits++; tr.missed = 0;
+            tr.score = d.score; tr.rotated = d.rotated; tr.obb = d.obb; tr.hits++; tr.missed = 0;
           } else tr.missed++;
         }
         dets.forEach((d, i) => { if (!used.has(i)) tracks.push({ ...d, id: nextId++, hits: 1, missed: 0, born: Date.now() }); });

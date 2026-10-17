@@ -133,6 +133,8 @@
   // searched in full once more to measure its margin over the next-best card.
   // Returns {i, d, margin, variant}.
   const FINE = { flips: [0, 180], angles: [-10, -5, 0, 5, 10], scales: [0.88, 0.94, 1], shifts: [-0.04, 0, 0.04] };
+  // Boxes from the trained detector already carry the angle and fit tightly.
+  const FINE_OBB = { flips: [0, 180], angles: [-3, 0, 3], scales: [0.92, 0.97, 1.02], shifts: [-0.03, 0, 0.03] };
   const COARSE = { flips: [0, 180], angles: [-6, 0, 6], scales: [0.94] };
   function matchVariants(index, describeVariant, weight = COLOR_WEIGHT, grid = FINE, coarse = COARSE) {
     const short = new Set();
@@ -149,7 +151,7 @@
     return { i: top[0].i, d: top[0].d, margin: top[1] ? top[1].d - top[0].d : 99, variant: best.variant };
   }
 
-  const api = { FW, FH, RECORD, describe, distance, search, nearest, matchVariants, COLOR_WEIGHT };
+  const api = { FW, FH, RECORD, describe, distance, search, nearest, matchVariants, FINE_OBB, COLOR_WEIGHT };
 
   // Browser helpers: fingerprint a region of a video/canvas, load the index files.
   if (typeof document !== 'undefined') {

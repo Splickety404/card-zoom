@@ -223,18 +223,43 @@ setInterval(() => {
   loadPictureIndex();
   const region = stageRegion();
   if (!region) return;
-  let dets;
   const debug = $('dbg').checked;
+  loadCardNet();
+  if (CN && CN.ready()) {
+    // The trained detector runs asynchronously; skip ticks while one frame is still running.
+    if (netBusy) return;
+    netBusy = true;
+    CN.detect(S.video, region).then((dets) => afterDetect(dets, region, false))
+      .catch(() => status('The browser blocked reading this video. Use Start capture instead.'))
+      .finally(() => { netBusy = false; });
+    return;
+  }
+  let dets;
   try { dets = D.detectCards(S.video, region, { debug }); } catch { return status('The browser blocked reading this video. Use Start capture instead.'); }
+  afterDetect(dets, region, debug);
+}, DETECT_MS);
+
+// The trained detector (models/cards-obb.onnx) replaces the edge-based one once it has loaded;
+// if it can't load (offline, old browser), detection stays edge-based.
+const CN = window.CardZoom.cardnet;
+let netBusy = false, netLoading = false;
+function loadCardNet() {
+  if (!CN || netLoading || new URLSearchParams(location.search).has('classic')) return;
+  netLoading = true;
+  CN.load('models/cards-obb.onnx').catch(() => {});
+}
+
+function afterDetect(dets, region, debug) {
+  if (!S.video) return;
   const kept = dets.filter((d) => !isExcluded(d, region));
   S.tracks = tracker.update(kept);
-  if (debug) drawDebug(dets.debug);
+  if (debug && dets.debug) drawDebug(dets.debug);
   if (++S.checkTick % 6 === 0) recheckIdentities();
   chooseFocus();
   renderMarks(); renderSpotted();
   if (!S.manual) renderZoom(false);
   maybeIdentify();
-}, DETECT_MS);
+}
 
 // ---------- "Not a card" ----------
 function toFrac(b, region) { return { x: (b.x - region.x) / region.w, y: (b.y - region.y) / region.h, w: b.w / region.w, h: b.h / region.h }; }
@@ -327,10 +352,15 @@ function renderMarks() {
     if (card) {
       const src = card.big || card.img;
       if (img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
-      // Tapped cards: draw the upright scan turned 90 degrees to sit in the landscape box.
-      const sw = t.rotated ? b.h : b.w, sh = t.rotated ? b.w : b.h;
+      // Draw the upright scan turned to lie like the card: by the trained detector's angle when
+      // there is one, else 90 degrees for tapped cards in a landscape box.
+      let sw = t.rotated ? b.h : b.w, sh = t.rotated ? b.w : b.h, turn = t.rotated ? 90 : 0;
+      if (t.obb) {
+        const k = b.w / t.w;
+        sw = t.obb.cw * k; sh = t.obb.ch * k; turn = t.obb.angle + (S.ids.get(t.id).flip || 0);
+      }
       Object.assign(img.style, { display: 'block', width: sw + 'px', height: sh + 'px',
-        left: (b.w - sw) / 2 + 'px', top: (b.h - sh) / 2 + 'px', transform: t.rotated ? 'rotate(90deg)' : '' });
+        left: (b.w - sw) / 2 + 'px', top: (b.h - sh) / 2 + 'px', transform: turn ? `rotate(${turn}deg)` : '' });
     } else img.style.display = 'none';
   }
   for (const [id, m] of marksById) if (!live.has(id)) { m.remove(); marksById.delete(id); }
@@ -428,12 +458,15 @@ function loadPictureIndex() {
 const STRONG_LEAD = 15, CLOSE_MATCH = 18;
 function identifyByPicture(t) {
   const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
-  const cx = t.x + t.w / 2, cy = t.y + t.h / 2, cw = t.rotated ? t.h : t.w, ch = t.rotated ? t.w : t.h;
-  const base = t.rotated ? 90 : 0;
+  // The trained detector gives the card's angle and size; the edge detector only an upright box.
+  const o = t.obb, cx = o ? o.cx : t.x + t.w / 2, cy = o ? o.cy : t.y + t.h / 2;
+  const cw = o ? o.cw : t.rotated ? t.h : t.w, ch = o ? o.ch : t.rotated ? t.w : t.h;
+  const base = o ? o.angle : t.rotated ? 90 : 0;
   let best;
   try {
     best = F.matchVariants(mtgIndex, (flip, angle, scale, dx, dy) =>
-      F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle), info.weight ?? F.COLOR_WEIGHT);
+      F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle),
+    info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
   } catch { return false; }
   if (best.d > maxDist || best.margin < minMargin) return false;
   if (best.margin < STRONG_LEAD && best.d > maxDist - CLOSE_MATCH) return false;
@@ -444,7 +477,7 @@ function identifyByPicture(t) {
     img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
     link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}`,
   };
-  S.ids.set(t.id, { card, byPicture: true, dist: best.d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+  S.ids.set(t.id, { card, byPicture: true, dist: best.d, flip: best.variant.flip, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
   return true;
 }
 
