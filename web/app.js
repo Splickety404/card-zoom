@@ -454,8 +454,9 @@ function loadPictureIndex() {
 // Accept a match only when it is close and clearly better than the next-best card.
 // The build's self-test picks the colour weight and distance cut-off and stores them in the index.
 // On real broadcasts (sleeves, glare, tilted and upside-down cards) a wrong card can come close,
-// but almost never with a clear lead, so a loose match also needs a wide margin.
-const STRONG_LEAD = 15, CLOSE_MATCH = 18;
+// but almost never with a clear lead, so a loose match also needs a wide margin. Both are
+// relative to the index's cut-off, since that scales with the colour weight the build picks.
+const STRONG_LEAD = 0.42, CLOSE_MATCH = 0.5;
 function identifyByPicture(t) {
   const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
   // The trained detector gives the card's angle and size; the edge detector only an upright box.
@@ -469,7 +470,7 @@ function identifyByPicture(t) {
     info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
   } catch { return false; }
   if (best.d > maxDist || best.margin < minMargin) return false;
-  if (best.margin < STRONG_LEAD && best.d > maxDist - CLOSE_MATCH) return false;
+  if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
   const [name, set, num, sid] = mtgIndex.meta[best.i];
   const path = `front/${sid[0]}/${sid[1]}/${sid}`;
   const card = {

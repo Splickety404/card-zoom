@@ -53,7 +53,17 @@ Known limits, honestly stated:
 - Cards that touch or overlap can merge into one box, or be missed.
 - Card-shaped stream overlays (some streamers' card popups) will be spotted too; that is often what you want.
 - OCR on stream-quality text is hit and miss. Scryfall's fuzzy match forgives small typos; the others less so.
-- Upgrade path if needed: a small object detection model (e.g. YOLO via ONNX Runtime Web) as a drop-in replacement for `detectCards`.
+
+## Trained card detector
+
+`core/cardnet.js` runs a small trained detector (`models/cards-obb.onnx`, YOLO11n-OBB, about 11 MB) with ONNX Runtime Web in a background worker, loaded from a CDN on first use. It finds every card with its exact angle, including fanned hands, overlapping piles and upside-down cards, in any game, and the picture matcher then reads each card at that angle. If the model or runtime can't load, the page falls back to the edge-based detector in `core/detect.js` (also forced with `?classic`).
+
+The model is trained only on generated tables, so no hand-labelled footage is needed:
+- `tools/detector/fetch-cards.mjs` (GitHub Action `fetch-training-cards.yml`) downloads about 4,500 card images from Scryfall, pokemontcg.io, YGOPRODeck and Lorcast into the `training-cards` branch.
+- `tools/detector/synth.py CARDS OUT` composes broadcast-like frames from them: playmats with logos and bands, webcams, score bars and captions, rows of permanents (tapped, far side upside down), fanned clusters, piles, sleeves, glare, blur and heavy JPEG. Each card is labelled with its corners.
+- `tools/detector/train.py OUT/data.yaml` fine-tunes Ultralytics YOLO11n-OBB on CPU and exports the ONNX file. The base model and its derivatives are AGPL-3.0.
+
+Real broadcast screenshots used for checking live in the project's `benchmarks/` folder (Magic, Pokémon, Lorcana, Star Wars: Unlimited, Flesh and Blood).
 
 ## Card databases
 

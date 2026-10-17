@@ -10,30 +10,52 @@
   'use strict';
 
   let ortUrl = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js';
-  let session = null, loading = null, inputName = null, size = 640;
+  let worker = null, loading = null, size = 640, ready = false, nextId = 0;
+  const pending = new Map();
   const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
 
-  function loadScript(src) {
+  // The network takes a few hundred milliseconds per frame, so it runs in a worker to keep the
+  // page responsive. The worker is made from a string so this file stays a plain classic script.
+  const WORKER = `
+    let session;
+    self.onmessage = async (e) => {
+      const m = e.data;
+      try {
+        if (m.type === 'load') {
+          importScripts(m.ortUrl);
+          ort.env.wasm.wasmPaths = m.ortUrl.replace(/[^/]*$/, '');
+          ort.env.wasm.numThreads = 1;
+          session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ['wasm'] });
+          const dims = session.inputMetadata && session.inputMetadata[0] && session.inputMetadata[0].shape;
+          postMessage({ id: m.id, size: dims && typeof dims[2] === 'number' ? dims[2] : 640 });
+        } else {
+          const out = await session.run({ [session.inputNames[0]]: new ort.Tensor('float32', m.data, [1, 3, m.size, m.size]) });
+          const t = out[session.outputNames[0]];
+          postMessage({ id: m.id, dims: t.dims, data: t.data }, [t.data.buffer]);
+        }
+      } catch (err) { postMessage({ id: m.id, error: String(err && err.message || err) }); }
+    };`;
+  function call(msg, transfer) {
     return new Promise((ok, fail) => {
-      const s = document.createElement('script');
-      s.src = src; s.onload = ok; s.onerror = () => fail(new Error('could not load ' + src));
-      document.head.appendChild(s);
+      const id = ++nextId;
+      pending.set(id, { ok, fail });
+      worker.postMessage({ ...msg, id }, transfer || []);
     });
   }
 
   function load(modelUrl) {
-    if (session) return Promise.resolve(session);
     if (!loading) {
       loading = (async () => {
-        if (!root.ort) await loadScript(ortUrl);
-        root.ort.env.wasm.wasmPaths = ortUrl.replace(/[^/]*$/, '');
-        root.ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
-        session = await root.ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] });
-        inputName = session.inputNames[0];
-        const dims = session.inputMetadata?.[0]?.shape;
-        if (dims && typeof dims[2] === 'number') size = dims[2];
-        return session;
-      })().catch((e) => { loading = null; throw e; });
+        worker = new Worker(URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' })));
+        worker.onmessage = (e) => {
+          const p = pending.get(e.data.id);
+          if (!p) return;
+          pending.delete(e.data.id);
+          e.data.error ? p.fail(new Error(e.data.error)) : p.ok(e.data);
+        };
+        const r = await call({ type: 'load', ortUrl, modelUrl: new URL(modelUrl, location.href).href });
+        size = r.size; ready = true;
+      })().catch((e) => { loading = null; if (worker) worker.terminate(); worker = null; throw e; });
     }
     return loading;
   }
@@ -69,7 +91,7 @@
   }
 
   async function detect(source, region, { minScore = 0.35, iouThreshold = 0.5 } = {}) {
-    if (!session) throw new Error('model not loaded');
+    if (!ready) throw new Error('model not loaded');
     const vw = source.videoWidth || source.width, vh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: vw, h: vh };
     // Letterbox the region into size x size, like the training pipeline.
@@ -85,8 +107,7 @@
     for (let i = 0; i < N; i++) {
       input[i] = px[i * 4] / 255; input[N + i] = px[i * 4 + 1] / 255; input[2 * N + i] = px[i * 4 + 2] / 255;
     }
-    const out = await session.run({ [inputName]: new root.ort.Tensor('float32', input, [1, 3, size, size]) });
-    const t = out[session.outputNames[0]], [, ch, n] = t.dims, d = t.data;
+    const t = await call({ type: 'run', data: input, size }, [input.buffer]), [, ch, n] = t.dims, d = t.data;
     // Rows: cx, cy, w, h, score (one class), angle in radians.
     const cand = [];
     for (let i = 0; i < n; i++) {
@@ -113,5 +134,5 @@
   }
 
   root.CardZoom = root.CardZoom || {};
-  root.CardZoom.cardnet = { load, detect, ready: () => !!session, setOrtUrl: (u) => { ortUrl = u; }, rotatedIou };
+  root.CardZoom.cardnet = { load, detect, ready: () => ready, setOrtUrl: (u) => { ortUrl = u; }, rotatedIou };
 })(typeof window !== 'undefined' ? window : self);
