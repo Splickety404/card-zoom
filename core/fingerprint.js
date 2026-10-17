@@ -107,7 +107,49 @@
     return best;
   }
 
-  const api = { FW, FH, RECORD, describe, distance, search, COLOR_WEIGHT };
+  // The k closest records (names may repeat), optionally only among the given record numbers.
+  function nearest(index, desc, k, weight = COLOR_WEIGHT, among = null) {
+    const n = among ? among.length : index.meta.length, best = [];
+    for (let j = 0; j < n; j++) {
+      const r = among ? among[j] : j, off = r * RECORD;
+      let ham = 0;
+      for (let i = 0; i < 8; i++) ham += POP[desc[i] ^ index.data[off + i]];
+      if (best.length === k && ham >= best[k - 1].d) continue;
+      let col = 0;
+      for (let i = 8; i < RECORD; i++) col += Math.abs(desc[i] - index.data[off + i]);
+      const d = ham + weight * col / COLOR_BYTES;
+      if (best.length < k || d < best[k - 1].d) {
+        best.push({ i: r, d }); best.sort((a, b) => a.d - b.d);
+        if (best.length > k) best.pop();
+      }
+    }
+    return best;
+  }
+
+  // Broadcast boxes are loose, tilted and often upside down (cards facing the other player).
+  // describeVariant(flip, angle, scale, dx, dy) fingerprints one guess of the card's placement.
+  // A few coarse guesses are searched across the whole index to shortlist candidates, then a
+  // finer grid of guesses is scored against the shortlist only, and the winning guess is
+  // searched in full once more to measure its margin over the next-best card.
+  // Returns {i, d, margin, variant}.
+  const FINE = { flips: [0, 180], angles: [-10, -5, 0, 5, 10], scales: [0.88, 0.94, 1], shifts: [-0.04, 0, 0.04] };
+  const COARSE = { flips: [0, 180], angles: [-6, 0, 6], scales: [0.94] };
+  function matchVariants(index, describeVariant, weight = COLOR_WEIGHT, grid = FINE, coarse = COARSE) {
+    const short = new Set();
+    for (const f of coarse.flips) for (const a of coarse.angles) for (const s of coarse.scales)
+      for (const b of nearest(index, describeVariant(f, a, s, 0, 0), 25, weight)) short.add(b.i);
+    const among = [...short];
+    let best = null;
+    for (const f of grid.flips) for (const a of grid.angles) for (const s of grid.scales)
+      for (const dx of grid.shifts) for (const dy of grid.shifts) {
+        const desc = describeVariant(f, a, s, dx, dy), b = nearest(index, desc, 1, weight, among)[0];
+        if (b && (!best || b.d < best.d)) best = { d: b.d, desc, variant: { flip: f, angle: a, scale: s, dx, dy } };
+      }
+    const top = search(index, best.desc, 2, weight);
+    return { i: top[0].i, d: top[0].d, margin: top[1] ? top[1].d - top[0].d : 99, variant: best.variant };
+  }
+
+  const api = { FW, FH, RECORD, describe, distance, search, nearest, matchVariants, COLOR_WEIGHT };
 
   // Browser helpers: fingerprint a region of a video/canvas, load the index files.
   if (typeof document !== 'undefined') {
@@ -119,6 +161,20 @@
       ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
       if (rotate) { ctx.translate(0, FH); ctx.rotate(-Math.PI / 2); ctx.drawImage(src, x, y, w, h, 0, 0, FH, FW); }
       else ctx.drawImage(src, x, y, w, h, 0, 0, FW, FH);
+      ctx.restore();
+      return describe(ctx.getImageData(0, 0, FW, FH).data, 4);
+    };
+    // A card centred at (cx, cy), cw x ch in its own upright frame, turned angle degrees clockwise
+    // in the source (0 upright, 90 tapped, 180 seen from across the table, or anything between).
+    api.describeBox = (src, cx, cy, cw, ch, angle = 0) => {
+      const r = Math.ceil(Math.hypot(cw, ch) / 2) + 1;
+      const sx = Math.max(0, Math.floor(cx - r)), sy = Math.max(0, Math.floor(cy - r));
+      const sw = Math.min((src.videoWidth || src.width) - sx, 2 * r), sh = Math.min((src.videoHeight || src.height) - sy, 2 * r);
+      ctx.save();
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, FW, FH);
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.translate(FW / 2, FH / 2); ctx.scale(FW / cw, FH / ch); ctx.rotate(-angle * Math.PI / 180); ctx.translate(-cx, -cy);
+      if (sw > 0 && sh > 0) ctx.drawImage(src, sx, sy, sw, sh, sx, sy, sw, sh);
       ctx.restore();
       return describe(ctx.getImageData(0, 0, FW, FH).data, 4);
     };

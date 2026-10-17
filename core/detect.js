@@ -19,9 +19,9 @@
     const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: sw, h: sh };
     const {
-      analysisWidth = 800, minHeightFrac = 0.03, maxHeightFrac = 0.95,
+      analysisWidth = 800, minHeightFrac = 0.05, maxHeightFrac = 0.95,
       aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
-      minSideEdge = 0.5, minMeanSideEdge = 0.7, minInnerLines = 2,
+      minSideEdge = 0.5, minMeanSideEdge = 0.7, minInnerLines = 2, scanMinSide = 0.6, scanMinMean = 0.78,
     } = opts;
     const W = Math.min(analysisWidth, Math.round(region.w)), H = Math.round(region.h * W / region.w);
     if (W < 32 || H < 32) return [];
@@ -83,21 +83,29 @@
       next++;
     }
 
-    // Fraction of a box side that lies on edge pixels (searching +-2 px across the side).
-    const sideScore = (ax, ay, bx, by) => {
-      const len = Math.max(Math.abs(bx - ax), Math.abs(by - ay)) + 1;
-      const horiz = ay === by;
-      let hit = 0;
-      for (let k = 0; k < len; k++) {
-        const x = horiz ? ax + k : ax, y = horiz ? ay : ay + k;
-        let ok = 0;
-        for (let d = -2; d <= 2 && !ok; d++) {
-          const xx = horiz ? x : x + d, yy = horiz ? y + d : y;
-          if (xx >= 0 && yy >= 0 && xx < W && yy < H && edge[yy * W + xx]) ok = 1;
-        }
-        hit += ok;
+    // Fraction of a box side that lies on edge pixels (within +-2 px across the side). Prefix sums
+    // over edge maps smeared across each direction make every side test O(1), which is what lets
+    // the window scan below try thousands of boxes per frame.
+    const rowPS = new Int32Array((W + 1) * H), colPS = new Int32Array(W * (H + 1));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let v = 0; // horizontal sides: any edge within 2 px above or below
+        for (let d = -2; d <= 2 && !v; d++) { const yy = y + d; if (yy >= 0 && yy < H && edge[yy * W + x]) v = 1; }
+        rowPS[y * (W + 1) + x + 1] = rowPS[y * (W + 1) + x] + v;
       }
-      return hit / len;
+    }
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < H; y++) {
+        let v = 0; // vertical sides: any edge within 2 px left or right
+        for (let d = -2; d <= 2 && !v; d++) { const xx = x + d; if (xx >= 0 && xx < W && edge[y * W + xx]) v = 1; }
+        colPS[x * (H + 1) + y + 1] = colPS[x * (H + 1) + y] + v;
+      }
+    }
+    const sideScore = (ax, ay, bx, by) => {
+      ax = Math.max(0, Math.min(W - 1, ax)); bx = Math.max(0, Math.min(W - 1, bx));
+      ay = Math.max(0, Math.min(H - 1, ay)); by = Math.max(0, Math.min(H - 1, by));
+      if (ay === by) return (rowPS[ay * (W + 1) + bx + 1] - rowPS[ay * (W + 1) + ax]) / (bx - ax + 1);
+      return (colPS[ax * (H + 1) + by + 1] - colPS[ax * (H + 1) + ay]) / (by - ay + 1);
     };
 
     // Counts straight edge lines running across the card's short side, inside its border
@@ -157,6 +165,37 @@
           if (c) pieces.push(c);
         }
         if (pieces.length) { cands.push(...pieces); break; }
+      }
+    }
+
+    // Cards touching or overlapping merge into blobs no split can untangle. When the card size is
+    // known (from opts.cardHeight, or from several clean detections), slide card-sized boxes over
+    // the whole frame and keep those with strong straight edges on all four sides.
+    const sizes = cands.map((c) => Math.max(c.w, c.h)).sort((a, b) => a - b);
+    const hint = opts.cardHeight ? opts.cardHeight * W / region.w : sizes.length >= 3 ? sizes[sizes.length >> 1] : 0;
+    if (hint >= H * minHeightFrac) {
+      const found = [];
+      for (const k of [0.92, 1, 1.08]) {
+        const L = Math.round(hint * k), Sh = Math.round(L * CARD), step = Math.max(2, Math.round(L / 12));
+        for (const [w, h] of [[Sh, L], [L, Sh]]) {
+          for (let y0 = 0; y0 + h < H; y0 += step) {
+            for (let x0 = 0; x0 + w < W; x0 += step) {
+              const x1 = x0 + w - 1, y1 = y0 + h - 1;
+              const a = sideScore(x0, y0, x1, y0), b = sideScore(x0, y1, x1, y1);
+              if (a < scanMinSide || b < scanMinSide) continue;
+              const c = sideScore(x0, y0, x0, y1), d = sideScore(x1, y0, x1, y1);
+              if (c < scanMinSide || d < scanMinSide) continue;
+              const mean = (a + b + c + d) / 4;
+              if (mean >= scanMinMean) found.push({ x0, y0, w, h, score: mean, rotated: w > h });
+            }
+          }
+        }
+      }
+      // Each card produces a cluster of nearby hits: refine each to its local best.
+      found.sort((p, q) => q.score - p.score);
+      for (const f of found) {
+        if (cands.some((c) => iou(f, c) > 0.3)) continue;
+        cands.push(f);
       }
     }
 

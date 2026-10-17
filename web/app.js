@@ -386,11 +386,18 @@ async function maybeIdentify() {
   // Picture matching is fast and offline: try every steady card each tick. A card that doesn't
   // match (a non-card, or a bad frame) is retried a few times on later frames.
   if (mtgIndex) {
-    for (const t of S.tracks) {
-      if (t.hits < 3 || S.ids.has(t.id)) continue;
+    // Each card takes about a tenth of a second (it tries many placements), so spend a fixed
+    // budget per tick: the zoomed card first, then the cards tried least so far.
+    const until = performance.now() + 150;
+    const due = S.tracks.filter((t) => {
+      if (t.hits < 3 || S.ids.has(t.id)) return false;
       const tries = S.pictureTries.get(t.id) || 0;
-      if (tries >= 8 || (tries && S.checkTick % 3)) continue;
-      S.pictureTries.set(t.id, tries + 1);
+      return tries < 8 && (!tries || S.checkTick % 3 === 0);
+    }).sort((a, b) => (b.id === S.focusId) - (a.id === S.focusId)
+      || (S.pictureTries.get(a.id) || 0) - (S.pictureTries.get(b.id) || 0));
+    for (const t of due) {
+      if (performance.now() > until) break;
+      S.pictureTries.set(t.id, (S.pictureTries.get(t.id) || 0) + 1);
       if (identifyByPicture(t)) { renderMarks(); renderSpotted(); updateZoomView(); }
     }
   }
@@ -416,27 +423,28 @@ function loadPictureIndex() {
 }
 // Accept a match only when it is close and clearly better than the next-best card.
 // The build's self-test picks the colour weight and distance cut-off and stores them in the index.
+// On real broadcasts (sleeves, glare, tilted and upside-down cards) a wrong card can come close,
+// but almost never with a clear lead, so a loose match also needs a wide margin.
+const STRONG_LEAD = 15, CLOSE_MATCH = 18;
 function identifyByPicture(t) {
   const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
-  // Detection boxes are a little loose and the match is sensitive to framing, so try a few
-  // insets and keep the closest result.
-  let best = null;
-  for (const inset of [0, 0.02, 0.04, 0.06]) {
-    const dx = t.w * inset, dy = t.h * inset;
-    let desc;
-    try { desc = F.describeRegion(S.video, t.x + dx, t.y + dy, t.w - 2 * dx, t.h - 2 * dy, t.rotated); } catch { return false; }
-    const r = F.search(mtgIndex, desc, 2, info.weight ?? F.COLOR_WEIGHT);
-    if (r.length && (!best || r[0].d < best[0].d)) best = r;
-  }
-  if (!best || best[0].d > maxDist || (best[1] && best[1].d - best[0].d < minMargin)) return false;
-  const [name, set, num, sid] = mtgIndex.meta[best[0].i];
+  const cx = t.x + t.w / 2, cy = t.y + t.h / 2, cw = t.rotated ? t.h : t.w, ch = t.rotated ? t.w : t.h;
+  const base = t.rotated ? 90 : 0;
+  let best;
+  try {
+    best = F.matchVariants(mtgIndex, (flip, angle, scale, dx, dy) =>
+      F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle), info.weight ?? F.COLOR_WEIGHT);
+  } catch { return false; }
+  if (best.d > maxDist || best.margin < minMargin) return false;
+  if (best.margin < STRONG_LEAD && best.d > maxDist - CLOSE_MATCH) return false;
+  const [name, set, num, sid] = mtgIndex.meta[best.i];
   const path = `front/${sid[0]}/${sid[1]}/${sid}`;
   const card = {
     name, set: set.toUpperCase(), game: 'mtg',
     img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
     link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}`,
   };
-  S.ids.set(t.id, { card, byPicture: true, dist: best[0].d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+  S.ids.set(t.id, { card, byPicture: true, dist: best.d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
   return true;
 }
 

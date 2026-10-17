@@ -306,9 +306,9 @@ section h2 .grow { flex: 1; }
     const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
     region = region || { x: 0, y: 0, w: sw, h: sh };
     const {
-      analysisWidth = 800, minHeightFrac = 0.03, maxHeightFrac = 0.95,
+      analysisWidth = 800, minHeightFrac = 0.05, maxHeightFrac = 0.95,
       aspectTolerance = 0.25, // loose enough for a camera looking at the table at an angle
-      minSideEdge = 0.5, minMeanSideEdge = 0.7, minInnerLines = 2,
+      minSideEdge = 0.5, minMeanSideEdge = 0.7, minInnerLines = 2, scanMinSide = 0.6, scanMinMean = 0.78,
     } = opts;
     const W = Math.min(analysisWidth, Math.round(region.w)), H = Math.round(region.h * W / region.w);
     if (W < 32 || H < 32) return [];
@@ -370,21 +370,29 @@ section h2 .grow { flex: 1; }
       next++;
     }
 
-    // Fraction of a box side that lies on edge pixels (searching +-2 px across the side).
-    const sideScore = (ax, ay, bx, by) => {
-      const len = Math.max(Math.abs(bx - ax), Math.abs(by - ay)) + 1;
-      const horiz = ay === by;
-      let hit = 0;
-      for (let k = 0; k < len; k++) {
-        const x = horiz ? ax + k : ax, y = horiz ? ay : ay + k;
-        let ok = 0;
-        for (let d = -2; d <= 2 && !ok; d++) {
-          const xx = horiz ? x : x + d, yy = horiz ? y + d : y;
-          if (xx >= 0 && yy >= 0 && xx < W && yy < H && edge[yy * W + xx]) ok = 1;
-        }
-        hit += ok;
+    // Fraction of a box side that lies on edge pixels (within +-2 px across the side). Prefix sums
+    // over edge maps smeared across each direction make every side test O(1), which is what lets
+    // the window scan below try thousands of boxes per frame.
+    const rowPS = new Int32Array((W + 1) * H), colPS = new Int32Array(W * (H + 1));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let v = 0; // horizontal sides: any edge within 2 px above or below
+        for (let d = -2; d <= 2 && !v; d++) { const yy = y + d; if (yy >= 0 && yy < H && edge[yy * W + x]) v = 1; }
+        rowPS[y * (W + 1) + x + 1] = rowPS[y * (W + 1) + x] + v;
       }
-      return hit / len;
+    }
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < H; y++) {
+        let v = 0; // vertical sides: any edge within 2 px left or right
+        for (let d = -2; d <= 2 && !v; d++) { const xx = x + d; if (xx >= 0 && xx < W && edge[y * W + xx]) v = 1; }
+        colPS[x * (H + 1) + y + 1] = colPS[x * (H + 1) + y] + v;
+      }
+    }
+    const sideScore = (ax, ay, bx, by) => {
+      ax = Math.max(0, Math.min(W - 1, ax)); bx = Math.max(0, Math.min(W - 1, bx));
+      ay = Math.max(0, Math.min(H - 1, ay)); by = Math.max(0, Math.min(H - 1, by));
+      if (ay === by) return (rowPS[ay * (W + 1) + bx + 1] - rowPS[ay * (W + 1) + ax]) / (bx - ax + 1);
+      return (colPS[ax * (H + 1) + by + 1] - colPS[ax * (H + 1) + ay]) / (by - ay + 1);
     };
 
     // Counts straight edge lines running across the card's short side, inside its border
@@ -444,6 +452,37 @@ section h2 .grow { flex: 1; }
           if (c) pieces.push(c);
         }
         if (pieces.length) { cands.push(...pieces); break; }
+      }
+    }
+
+    // Cards touching or overlapping merge into blobs no split can untangle. When the card size is
+    // known (from opts.cardHeight, or from several clean detections), slide card-sized boxes over
+    // the whole frame and keep those with strong straight edges on all four sides.
+    const sizes = cands.map((c) => Math.max(c.w, c.h)).sort((a, b) => a - b);
+    const hint = opts.cardHeight ? opts.cardHeight * W / region.w : sizes.length >= 3 ? sizes[sizes.length >> 1] : 0;
+    if (hint >= H * minHeightFrac) {
+      const found = [];
+      for (const k of [0.92, 1, 1.08]) {
+        const L = Math.round(hint * k), Sh = Math.round(L * CARD), step = Math.max(2, Math.round(L / 12));
+        for (const [w, h] of [[Sh, L], [L, Sh]]) {
+          for (let y0 = 0; y0 + h < H; y0 += step) {
+            for (let x0 = 0; x0 + w < W; x0 += step) {
+              const x1 = x0 + w - 1, y1 = y0 + h - 1;
+              const a = sideScore(x0, y0, x1, y0), b = sideScore(x0, y1, x1, y1);
+              if (a < scanMinSide || b < scanMinSide) continue;
+              const c = sideScore(x0, y0, x0, y1), d = sideScore(x1, y0, x1, y1);
+              if (c < scanMinSide || d < scanMinSide) continue;
+              const mean = (a + b + c + d) / 4;
+              if (mean >= scanMinMean) found.push({ x0, y0, w, h, score: mean, rotated: w > h });
+            }
+          }
+        }
+      }
+      // Each card produces a cluster of nearby hits: refine each to its local best.
+      found.sort((p, q) => q.score - p.score);
+      for (const f of found) {
+        if (cands.some((c) => iou(f, c) > 0.3)) continue;
+        cands.push(f);
       }
     }
 
@@ -758,7 +797,49 @@ section h2 .grow { flex: 1; }
     return best;
   }
 
-  const api = { FW, FH, RECORD, describe, distance, search, COLOR_WEIGHT };
+  // The k closest records (names may repeat), optionally only among the given record numbers.
+  function nearest(index, desc, k, weight = COLOR_WEIGHT, among = null) {
+    const n = among ? among.length : index.meta.length, best = [];
+    for (let j = 0; j < n; j++) {
+      const r = among ? among[j] : j, off = r * RECORD;
+      let ham = 0;
+      for (let i = 0; i < 8; i++) ham += POP[desc[i] ^ index.data[off + i]];
+      if (best.length === k && ham >= best[k - 1].d) continue;
+      let col = 0;
+      for (let i = 8; i < RECORD; i++) col += Math.abs(desc[i] - index.data[off + i]);
+      const d = ham + weight * col / COLOR_BYTES;
+      if (best.length < k || d < best[k - 1].d) {
+        best.push({ i: r, d }); best.sort((a, b) => a.d - b.d);
+        if (best.length > k) best.pop();
+      }
+    }
+    return best;
+  }
+
+  // Broadcast boxes are loose, tilted and often upside down (cards facing the other player).
+  // describeVariant(flip, angle, scale, dx, dy) fingerprints one guess of the card's placement.
+  // A few coarse guesses are searched across the whole index to shortlist candidates, then a
+  // finer grid of guesses is scored against the shortlist only, and the winning guess is
+  // searched in full once more to measure its margin over the next-best card.
+  // Returns {i, d, margin, variant}.
+  const FINE = { flips: [0, 180], angles: [-10, -5, 0, 5, 10], scales: [0.88, 0.94, 1], shifts: [-0.04, 0, 0.04] };
+  const COARSE = { flips: [0, 180], angles: [-6, 0, 6], scales: [0.94] };
+  function matchVariants(index, describeVariant, weight = COLOR_WEIGHT, grid = FINE, coarse = COARSE) {
+    const short = new Set();
+    for (const f of coarse.flips) for (const a of coarse.angles) for (const s of coarse.scales)
+      for (const b of nearest(index, describeVariant(f, a, s, 0, 0), 25, weight)) short.add(b.i);
+    const among = [...short];
+    let best = null;
+    for (const f of grid.flips) for (const a of grid.angles) for (const s of grid.scales)
+      for (const dx of grid.shifts) for (const dy of grid.shifts) {
+        const desc = describeVariant(f, a, s, dx, dy), b = nearest(index, desc, 1, weight, among)[0];
+        if (b && (!best || b.d < best.d)) best = { d: b.d, desc, variant: { flip: f, angle: a, scale: s, dx, dy } };
+      }
+    const top = search(index, best.desc, 2, weight);
+    return { i: top[0].i, d: top[0].d, margin: top[1] ? top[1].d - top[0].d : 99, variant: best.variant };
+  }
+
+  const api = { FW, FH, RECORD, describe, distance, search, nearest, matchVariants, COLOR_WEIGHT };
 
   // Browser helpers: fingerprint a region of a video/canvas, load the index files.
   if (typeof document !== 'undefined') {
@@ -770,6 +851,20 @@ section h2 .grow { flex: 1; }
       ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
       if (rotate) { ctx.translate(0, FH); ctx.rotate(-Math.PI / 2); ctx.drawImage(src, x, y, w, h, 0, 0, FH, FW); }
       else ctx.drawImage(src, x, y, w, h, 0, 0, FW, FH);
+      ctx.restore();
+      return describe(ctx.getImageData(0, 0, FW, FH).data, 4);
+    };
+    // A card centred at (cx, cy), cw x ch in its own upright frame, turned angle degrees clockwise
+    // in the source (0 upright, 90 tapped, 180 seen from across the table, or anything between).
+    api.describeBox = (src, cx, cy, cw, ch, angle = 0) => {
+      const r = Math.ceil(Math.hypot(cw, ch) / 2) + 1;
+      const sx = Math.max(0, Math.floor(cx - r)), sy = Math.max(0, Math.floor(cy - r));
+      const sw = Math.min((src.videoWidth || src.width) - sx, 2 * r), sh = Math.min((src.videoHeight || src.height) - sy, 2 * r);
+      ctx.save();
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, FW, FH);
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.translate(FW / 2, FH / 2); ctx.scale(FW / cw, FH / ch); ctx.rotate(-angle * Math.PI / 180); ctx.translate(-cx, -cy);
+      if (sw > 0 && sh > 0) ctx.drawImage(src, sx, sy, sw, sh, sx, sy, sw, sh);
       ctx.restore();
       return describe(ctx.getImageData(0, 0, FW, FH).data, 4);
     };
@@ -1258,11 +1353,18 @@ async function maybeIdentify() {
   // Picture matching is fast and offline: try every steady card each tick. A card that doesn't
   // match (a non-card, or a bad frame) is retried a few times on later frames.
   if (mtgIndex) {
-    for (const t of S.tracks) {
-      if (t.hits < 3 || S.ids.has(t.id)) continue;
+    // Each card takes about a tenth of a second (it tries many placements), so spend a fixed
+    // budget per tick: the zoomed card first, then the cards tried least so far.
+    const until = performance.now() + 150;
+    const due = S.tracks.filter((t) => {
+      if (t.hits < 3 || S.ids.has(t.id)) return false;
       const tries = S.pictureTries.get(t.id) || 0;
-      if (tries >= 8 || (tries && S.checkTick % 3)) continue;
-      S.pictureTries.set(t.id, tries + 1);
+      return tries < 8 && (!tries || S.checkTick % 3 === 0);
+    }).sort((a, b) => (b.id === S.focusId) - (a.id === S.focusId)
+      || (S.pictureTries.get(a.id) || 0) - (S.pictureTries.get(b.id) || 0));
+    for (const t of due) {
+      if (performance.now() > until) break;
+      S.pictureTries.set(t.id, (S.pictureTries.get(t.id) || 0) + 1);
       if (identifyByPicture(t)) { renderMarks(); renderSpotted(); updateZoomView(); }
     }
   }
@@ -1288,27 +1390,28 @@ function loadPictureIndex() {
 }
 // Accept a match only when it is close and clearly better than the next-best card.
 // The build's self-test picks the colour weight and distance cut-off and stores them in the index.
+// On real broadcasts (sleeves, glare, tilted and upside-down cards) a wrong card can come close,
+// but almost never with a clear lead, so a loose match also needs a wide margin.
+const STRONG_LEAD = 15, CLOSE_MATCH = 18;
 function identifyByPicture(t) {
   const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
-  // Detection boxes are a little loose and the match is sensitive to framing, so try a few
-  // insets and keep the closest result.
-  let best = null;
-  for (const inset of [0, 0.02, 0.04, 0.06]) {
-    const dx = t.w * inset, dy = t.h * inset;
-    let desc;
-    try { desc = F.describeRegion(S.video, t.x + dx, t.y + dy, t.w - 2 * dx, t.h - 2 * dy, t.rotated); } catch { return false; }
-    const r = F.search(mtgIndex, desc, 2, info.weight ?? F.COLOR_WEIGHT);
-    if (r.length && (!best || r[0].d < best[0].d)) best = r;
-  }
-  if (!best || best[0].d > maxDist || (best[1] && best[1].d - best[0].d < minMargin)) return false;
-  const [name, set, num, sid] = mtgIndex.meta[best[0].i];
+  const cx = t.x + t.w / 2, cy = t.y + t.h / 2, cw = t.rotated ? t.h : t.w, ch = t.rotated ? t.w : t.h;
+  const base = t.rotated ? 90 : 0;
+  let best;
+  try {
+    best = F.matchVariants(mtgIndex, (flip, angle, scale, dx, dy) =>
+      F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle), info.weight ?? F.COLOR_WEIGHT);
+  } catch { return false; }
+  if (best.d > maxDist || best.margin < minMargin) return false;
+  if (best.margin < STRONG_LEAD && best.d > maxDist - CLOSE_MATCH) return false;
+  const [name, set, num, sid] = mtgIndex.meta[best.i];
   const path = `front/${sid[0]}/${sid[1]}/${sid}`;
   const card = {
     name, set: set.toUpperCase(), game: 'mtg',
     img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
     link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}`,
   };
-  S.ids.set(t.id, { card, byPicture: true, dist: best[0].d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+  S.ids.set(t.id, { card, byPicture: true, dist: best.d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
   return true;
 }
 
