@@ -4,6 +4,7 @@
 // Usage: node tools/build-index.mjs [--limit N]
 import { createRequire } from 'node:module';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
 import sharp from 'sharp';
 
 const require = createRequire(import.meta.url);
@@ -40,9 +41,16 @@ async function fingerprint(buf) {
 const bulk = await getJSON('https://api.scryfall.com/bulk-data');
 const entry = bulk.data.find((b) => b.type === 'unique_artwork') || bulk.data.find((b) => b.type === 'default_cards');
 console.log('bulk entry:', JSON.stringify(entry).slice(0, 600));
-// The list entry normally carries download_uri; if not, its own uri returns the full entry.
-const full = entry.download_uri ? entry : await getJSON(entry.uri);
-const all = await getJSON(full.download_uri);
+// Scryfall offers the file as JSON (download_uri) or gzipped JSON Lines (jsonl_download_uri).
+async function loadBulk(e) {
+  if (e.download_uri) return getJSON(e.download_uri);
+  const r = await fetch(e.jsonl_download_uri, { headers: { 'User-Agent': UA['User-Agent'] } });
+  if (!r.ok) throw new Error(`${r.status} ${e.jsonl_download_uri}`);
+  let buf = Buffer.from(await r.arrayBuffer());
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf); // fetch may already have decoded it
+  return buf.toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+}
+const all = await loadBulk(entry);
 const cards = all.filter((c) => c.layout !== 'art_series' && (c.image_uris || c.card_faces?.[0]?.image_uris))
   .slice(0, LIMIT)
   .map((c) => ({
