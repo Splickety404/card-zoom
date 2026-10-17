@@ -78,3 +78,9 @@ core/ocr.js       card name reading
 ```
 
 `core/` has no page state and no DOM lookups; each file adds itself to `window.CardZoom` and works as a classic script, so an extension content script or an app webview can load the same files. For a Manifest V3 extension, bundle tesseract.js locally (`CardZoom.ocr.setTesseractUrl(...)`), since remote scripts aren't allowed.
+
+## Picture recognition (Magic)
+
+Reading names fails on broadcast footage, so Magic cards are recognised by their picture. `.github/workflows/build-index.yml` runs `tools/build-index.mjs` weekly (and on demand): it downloads every unique Magic artwork from Scryfall, fingerprints each image with `core/fingerprint.js` (a perceptual hash of the art plus a colour layout), and commits `data/mtg.bin` and `data/mtg.json`. It then self-tests on degraded copies of real cards (32 to 120 px tall, blurred, recompressed, re-lit) and on non-card crops, picks the colour weight and distance cut-off, and writes the results to `data/mtg-selftest.md` and the run summary.
+
+In the page, every steady detection is fingerprinted (trying a few insets, since boxes are slightly loose) and matched against the index; a match must be close and clearly better than the next card. Cards that match nothing (webcams, overlays) are never shown. Name reading is now only a fallback for large cards.

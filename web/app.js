@@ -3,7 +3,7 @@
 // would replace this file and keep core/ as is.
 (function () {
 'use strict';
-const { zoom: Z, detect: D, lookup: L, ocr: O, match: M } = window.CardZoom;
+const { zoom: Z, detect: D, lookup: L, ocr: O, match: M, fingerprint: F } = window.CardZoom;
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), media = $('media'), overlay = $('overlay'), selbox = $('selbox'), marks = $('marks');
 const zoom = $('zoom');
@@ -17,6 +17,7 @@ const S = {
   overlay: true,      // draw identified cards over the video
   excluded: [],       // areas the viewer marked "Not a card", as stage fractions {x,y,w,h}
   checkTick: 0,
+  pictureTries: new Map(), // track id -> picture-match attempts so far
   auto: true,         // automatic card spotting on
   tracks: [],         // cards currently spotted (source pixel boxes with stable ids)
   focusId: null,      // track shown in the zoom
@@ -55,6 +56,7 @@ function parseSource(raw) {
 
 function resetSpotting() {
   tracker.reset(); S.tracks = []; S.focusId = S.pinnedId = null; S.identified.clear(); S.ids.clear(); S.excluded = [];
+  S.pictureTries.clear();
   renderSpotted(); renderMarks();
 }
 
@@ -218,6 +220,7 @@ function currentRect() {
 const DETECT_MS = 350;
 setInterval(() => {
   if (!S.auto || !S.video || !S.video.videoWidth || document.hidden) return;
+  loadPictureIndex();
   const region = stageRegion();
   if (!region) return;
   let dets;
@@ -260,7 +263,7 @@ function recheckIdentities() {
     if (!id || !id.sig || id.picked) continue;
     try {
       const now = M.signature(S.video, t.x, t.y, t.w, t.h);
-      if (M.similarity(now, id.sig) < 0.6) { S.ids.delete(t.id); S.identified.delete(t.id); }
+      if (M.similarity(now, id.sig) < 0.6) { S.ids.delete(t.id); S.identified.delete(t.id); S.pictureTries.delete(t.id); }
     } catch { /* unreadable */ }
   }
 }
@@ -297,7 +300,7 @@ function chooseFocus() {
 const marksById = new Map();
 function confidentCard(id) {
   const c = id && id.card;
-  return c && (id.picked || id.forced || typeof c.match !== 'number' || c.match >= 0.6) ? c : null;
+  return c && (id.picked || id.forced || id.byPicture || typeof c.match !== 'number' || c.match >= 0.6) ? c : null;
 }
 function renderMarks() {
   const safe = S.kind === 'direct' || (S.kind === 'capture' && S.restricted);
@@ -379,13 +382,62 @@ $('auto').onclick = () => setAuto(!S.auto);
 // up, one at a time, the zoomed card first and then the biggest.
 let identifying = false;
 async function maybeIdentify() {
-  if (!$('autoId').checked || identifying) return;
-  const ready = S.tracks.filter((t) => t.hits >= 4 && !S.identified.has(t.id))
+  if (!$('autoId').checked) return;
+  // Picture matching is fast and offline: try every steady card each tick. A card that doesn't
+  // match (a non-card, or a bad frame) is retried a few times on later frames.
+  if (mtgIndex) {
+    for (const t of S.tracks) {
+      if (t.hits < 3 || S.ids.has(t.id)) continue;
+      const tries = S.pictureTries.get(t.id) || 0;
+      if (tries >= 8 || (tries && S.checkTick % 3)) continue;
+      S.pictureTries.set(t.id, tries + 1);
+      if (identifyByPicture(t)) { renderMarks(); renderSpotted(); updateZoomView(); }
+    }
+  }
+  if (identifying) return;
+  // Name reading only helps when the name is big enough to read, and runs one card at a time.
+  const H = S.video.videoHeight;
+  const ready = S.tracks.filter((t) => t.hits >= 4 && !S.identified.has(t.id) && !S.ids.has(t.id)
+      && (!mtgIndex || (S.pictureTries.get(t.id) || 0) >= 3) && Math.max(t.w, t.h) >= H * 0.25)
     .sort((a, b) => (b.id === S.focusId) - (a.id === S.focusId) || b.w * b.h - a.w * a.h);
   const t = ready[0];
   if (!t || (t.id === S.focusId && S.manual)) return;
   S.identified.add(t.id);
   await identify(true, t.id);
+}
+
+// ---------- Picture recognition (Magic) ----------
+// The index is built by .github/workflows/build-index.yml from Scryfall and served with the page.
+let mtgIndex = null, indexLoading = false;
+function loadPictureIndex() {
+  if (mtgIndex || indexLoading || !F) return;
+  indexLoading = true;
+  F.loadIndex('data/mtg').then((ix) => { mtgIndex = ix; }).catch(() => { indexLoading = false; });
+}
+// Accept a match only when it is close and clearly better than the next-best card.
+// The build's self-test picks the colour weight and distance cut-off and stores them in the index.
+function identifyByPicture(t) {
+  const info = mtgIndex.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
+  // Detection boxes are a little loose and the match is sensitive to framing, so try a few
+  // insets and keep the closest result.
+  let best = null;
+  for (const inset of [0, 0.02, 0.04, 0.06]) {
+    const dx = t.w * inset, dy = t.h * inset;
+    let desc;
+    try { desc = F.describeRegion(S.video, t.x + dx, t.y + dy, t.w - 2 * dx, t.h - 2 * dy, t.rotated); } catch { return false; }
+    const r = F.search(mtgIndex, desc, 2, info.weight ?? F.COLOR_WEIGHT);
+    if (r.length && (!best || r[0].d < best[0].d)) best = r;
+  }
+  if (!best || best[0].d > maxDist || (best[1] && best[1].d - best[0].d < minMargin)) return false;
+  const [name, set, num, sid] = mtgIndex.meta[best[0].i];
+  const path = `front/${sid[0]}/${sid[1]}/${sid}`;
+  const card = {
+    name, set: set.toUpperCase(), game: 'mtg',
+    img: `https://cards.scryfall.io/normal/${path}.jpg`, big: `https://cards.scryfall.io/png/${path}.png`,
+    link: `https://scryfall.com/card/${set}/${encodeURIComponent(num)}`,
+  };
+  S.ids.set(t.id, { card, byPicture: true, dist: best[0].d, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+  return true;
 }
 
 // ---------- Manual picking (fallback) ----------
@@ -474,7 +526,7 @@ function updateZoomView() {
   const cap = $('zoomCap');
   cap.replaceChildren();
   if (card) {
-    const pct = typeof card.match === 'number' ? ` · ${Math.round(Math.max(0, card.match) * 100)}% look match` : '';
+    const pct = id.byPicture ? ' · recognised by picture' : typeof card.match === 'number' ? ` · ${Math.round(Math.max(0, card.match) * 100)}% look match` : '';
     cap.append(`${unsure ? 'Best guess: ' : ''}${card.name} · ${L.GAMES[card.game].label}${card.set ? ' · ' + card.set : ''}${pct} `);
     if (card.link) { const a = document.createElement('a'); a.href = card.link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Details'; cap.append(a); }
   } else if (identifying && !zoom.hidden) cap.textContent = 'Identifying…';
