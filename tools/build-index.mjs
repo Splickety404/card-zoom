@@ -102,7 +102,7 @@ async function degrade(buf, height) {
     .jpeg({ quality: 45 }).toBuffer();
 }
 const heights = [32, 48, 72, 120];
-const weights = [0, 0.1, 0.25, 0.5, 1];
+const weights = [0.25, 0.5, 1, 1.5, 2, 3];
 const per = () => Object.fromEntries(weights.map((w) => [w, []]));
 const results = Object.fromEntries(heights.map((h) => [h, { n: 0, hit: Object.fromEntries(weights.map((w) => [w, 0])), dHit: per(), margin: per() }]));
 for (const [i, buf] of sampleBufs) {
