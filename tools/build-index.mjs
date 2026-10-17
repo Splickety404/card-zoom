@@ -28,7 +28,7 @@ async function getBuf(url, tries = 4) {
     try {
       const r = await fetch(url, { headers: { 'User-Agent': UA['User-Agent'] }, signal: AbortSignal.timeout(30000) });
       if (r.ok) return Buffer.from(await r.arrayBuffer());
-      if (r.status === 404) { failures[404] = (failures[404] || 0) + 1; return null; }
+      if (r.status === 404 || r.status === 403) { failures[r.status] = (failures[r.status] || 0) + 1; return null; } // missing (SWU-DB's CDN says 403)
       throw new Error(String(r.status));
     } catch (e) {
       if (t >= tries) { const k = String(e.message).slice(0, 40); failures[k] = (failures[k] || 0) + 1; return null; }
