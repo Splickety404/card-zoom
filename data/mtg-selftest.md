@@ -1,16 +1,16 @@
 ## Magic picture index
 
-52326 artworks, 3.9 MB. Chosen colour weight 3, max distance 54.5.
+52326 artworks, 3.9 MB. Chosen colour weight 1.5, max distance 35.5.
 
 ### Top-1 accuracy on degraded cards (by card height in px)
 
 | height | n | w=0.25 | w=0.5 | w=1 | w=1.5 | w=2 | w=3 | dist p50 / p95 (hits, chosen w) | margin p10 |
 |---|---|---|---|---|---|---|---|---|---|
-| 32 | 800 | 75.5% | 89.9% | 97.0% | 98.4% | 98.8% | 99.1% | 46.3 / 62.5 | 11.5 |
-| 48 | 800 | 86.1% | 95.1% | 97.6% | 99.0% | 99.6% | 99.5% | 41.7 / 55.3 | 16.2 |
-| 72 | 800 | 89.8% | 96.6% | 98.9% | 100.0% | 100.0% | 99.9% | 39.0 / 52.7 | 18.3 |
-| 120 | 800 | 96.6% | 98.9% | 99.6% | 99.6% | 99.8% | 99.8% | 33.8 / 48.1 | 22.3 |
+| 32 | 800 | 77.4% | 91.3% | 97.8% | 98.4% | 98.4% | 98.3% | 30.6 / 39.6 | 7.1 |
+| 48 | 800 | 87.6% | 94.9% | 98.4% | 98.9% | 98.9% | 98.9% | 27.9 / 36.3 | 9.7 |
+| 72 | 800 | 91.4% | 97.9% | 99.5% | 99.8% | 99.8% | 99.8% | 25.9 / 34.4 | 11.5 |
+| 120 | 800 | 97.1% | 99.3% | 99.8% | 99.8% | 99.8% | 99.9% | 22.8 / 31.6 | 14.2 |
 
-Non-card crops, best distance (chosen w): p05 63.6, p50 76.5, p90 92.5
+Non-card crops, best distance (chosen w): p05 41.8, p50 49.5, p90 57.0
 
-Share of cards identified correctly *and* under the cut-off: 32px 80.5%, 48px 93.4%, 72px 96.5%, 120px 98.8%
+Share of cards identified correctly *and* under the cut-off: 32px 79.1%, 48px 92.4%, 72px 96.3%, 120px 98.8%
