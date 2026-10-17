@@ -18,7 +18,7 @@ ap.add_argument('--out', default='models/cards-obb.onnx')
 a = ap.parse_args()
 
 model = YOLO(a.weights)
-results = model.train(data=a.data, epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device='cpu', workers=4,
+model.train(data=a.data, epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device='cpu', workers=4,
             # Cards appear at any angle (tapped, upside down), and the frames already carry blur,
             # glare and compression, so rotate freely but keep colour jitter modest.
             degrees=180, flipud=0.5, fliplr=0.5, mosaic=1.0, scale=0.5, hsv_h=0.015, hsv_s=0.4, hsv_v=0.3,
