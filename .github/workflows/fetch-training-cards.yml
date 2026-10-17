@@ -1,0 +1,30 @@
+name: Fetch detector training cards
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tools/detector/fetch-cards.mjs']
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/detector/fetch-cards.mjs /tmp/cards
+      - name: Publish as the training-cards branch
+        run: |
+          cd /tmp/cards
+          du -sh . && find . -name '*.jpg' | wc -l
+          git init -q -b training-cards
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Detector training card images"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" training-cards
