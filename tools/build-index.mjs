@@ -64,19 +64,18 @@ const SOURCES = {
       })) };
   },
   async pokemon() {
-    const cards = [];
-    for (let page = 1; ; page++) {
-      let j;
-      for (let t = 0; ; t++) {
-        try { j = await getJSON(`https://api.pokemontcg.io/v2/cards?page=${page}&pageSize=250&select=name,number,set,images`); break; }
-        catch (e) { if (t >= 5) throw e; await new Promise((ok) => setTimeout(ok, 3000 * (t + 1))); }
-      }
-      for (const c of j.data) if (c.images?.small) cards.push({
-        name: c.name, set: c.set?.ptcgoCode || c.set?.id || '', num: c.number, small: c.images.small,
+    // The pokemontcg.io API pages fail under load; its data repository has the same cards as
+    // one JSON file per set.
+    const base = 'https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master';
+    const sets = await getJSON(`${base}/sets/en.json`), cards = [];
+    for (const st of sets) {
+      let list;
+      try { list = await getJSON(`${base}/cards/en/${st.id}.json`); } catch (e) { console.log('skip set', st.id, e.message); continue; }
+      for (const c of list) if (c.images?.small) cards.push({
+        name: c.name, set: st.ptcgoCode || st.id, num: c.number, small: c.images.small,
         img: c.images.small, big: c.images.large || c.images.small,
-        link: `https://pokemontcg.io/card/${c.set?.id}-${c.number}`,
+        link: `https://pokemontcg.io/card/${c.id}`,
       });
-      if (j.data.length < 250) break;
     }
     return { source: 'pokemontcg.io', cards };
   },
