@@ -22,15 +22,16 @@ async function getJSON(url) {
   if (!r.ok) throw new Error(`${r.status} ${url}`);
   return r.json();
 }
+const failures = {}; // why images failed, for the log
 async function getBuf(url, tries = 4) {
   for (let t = 0; ; t++) {
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': UA['User-Agent'] } });
+      const r = await fetch(url, { headers: { 'User-Agent': UA['User-Agent'] }, signal: AbortSignal.timeout(30000) });
       if (r.ok) return Buffer.from(await r.arrayBuffer());
-      if (r.status === 404) return null;
+      if (r.status === 404) { failures[404] = (failures[404] || 0) + 1; return null; }
       throw new Error(String(r.status));
     } catch (e) {
-      if (t >= tries) return null;
+      if (t >= tries) { const k = String(e.message).slice(0, 40); failures[k] = (failures[k] || 0) + 1; return null; }
       await new Promise((ok) => setTimeout(ok, 500 * 2 ** t));
     }
   }
@@ -152,8 +153,8 @@ const sampleIdx = new Set();
 while (sampleIdx.size < Math.min(SAMPLE, cards.length)) sampleIdx.add(Math.floor(Math.random() * cards.length));
 const sampleBufs = new Map();
 let queue = [...cards.keys()], done = 0;
-async function worker(tries) {
-  while (queue.length) {
+async function worker(tries, until = Infinity) {
+  while (queue.length && Date.now() < until) {
     const i = queue.shift();
     const buf = await getBuf(cards[i].small, tries);
     if (buf) {
@@ -166,8 +167,9 @@ await Promise.all(Array.from({ length: 16 }, () => worker(4)));
 // Some hosts (SWU-DB's) throttle bursts: retry the misses slowly.
 queue = [...cards.keys()].filter((i) => !ok[i]);
 if (queue.length) {
-  console.log('retrying', queue.length, 'images that failed');
-  await Promise.all(Array.from({ length: 3 }, () => worker(7)));
+  console.log('retrying', queue.length, 'images that failed:', JSON.stringify(failures));
+  const until = Date.now() + 15 * 60e3; // never let the retries hold up the other games
+  await Promise.all(Array.from({ length: 4 }, () => worker(2, until)));
   console.log('still missing', [...ok].filter((x) => !x).length, 'e.g.', cards.find((c, i) => !ok[i])?.small);
 }
 
