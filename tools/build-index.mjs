@@ -38,9 +38,11 @@ async function fingerprint(buf) {
 
 // ---- 1. Card list: one entry per artwork ----
 const bulk = await getJSON('https://api.scryfall.com/bulk-data');
-const entry = bulk.data.find((b) => b.type === 'unique_artwork');
-console.log('downloading', entry.download_uri);
-const all = await getJSON(entry.download_uri);
+const entry = bulk.data.find((b) => b.type === 'unique_artwork') || bulk.data.find((b) => b.type === 'default_cards');
+console.log('bulk entry:', JSON.stringify(entry).slice(0, 600));
+// The list entry normally carries download_uri; if not, its own uri returns the full entry.
+const full = entry.download_uri ? entry : await getJSON(entry.uri);
+const all = await getJSON(full.download_uri);
 const cards = all.filter((c) => c.layout !== 'art_series' && (c.image_uris || c.card_faces?.[0]?.image_uris))
   .slice(0, LIMIT)
   .map((c) => ({

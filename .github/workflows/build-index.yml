@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: npm install --no-save sharp@0.33.5
       - run: node tools/build-index.mjs
       - name: Commit index
