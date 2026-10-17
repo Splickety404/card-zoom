@@ -147,7 +147,8 @@ const results = Object.fromEntries(heights.map((h) => [h, { n: 0, hit: Object.fr
 for (const [i, buf] of sampleBufs) {
   if (!pos.has(i)) continue;
   for (const h of heights) {
-    const desc = await fingerprint(await degrade(buf, h));
+    let desc;
+    try { desc = await fingerprint(await degrade(buf, h)); } catch { continue; }
     const R = results[h]; R.n++;
     for (const w of weights) {
       const best = FP.search(index, desc, 2, w);
@@ -164,8 +165,8 @@ for (const [, buf] of sampleBufs) {
   const img = sharp(buf), { width, height } = await img.metadata();
   const part = k % 2 ? { left: 0, top: Math.round(height * 0.55), width, height: Math.round(height * 0.45) }
     : { left: Math.round(width * 0.3), top: Math.round(height * 0.2), width: Math.round(width * 0.5), height: Math.round(height * 0.3) };
-  const crop = await img.extract(part).resize(64, 88, { fit: 'fill' }).blur(0.8).toBuffer();
-  const desc = await fingerprint(crop);
+  let desc;
+  try { desc = await fingerprint(await img.extract(part).resize(64, 88, { fit: 'fill' }).blur(0.8).toBuffer()); } catch { continue; } // odd-sized scan
   for (const w of weights) nonCard[w].push(FP.search(index, desc, 1, w)[0].d);
 }
 const pct = (arr, p) => { if (!arr.length) return '-'; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1); };
