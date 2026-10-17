@@ -143,7 +143,7 @@ section h2 .grow { flex: 1; }
   <aside>
     <section>
       <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="notCard" title="This isn't a card: ignore this area">Not a card</button><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
-      <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Spotted cards show here. You can also press Z and drag over a card.</div></div>
+      <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Click a card on the video, or in On screen below, to zoom it. You can also press Z and drag over a card.</div></div>
  <div id="zoomCap" class="hint"></div>
       <div class="row">
         <label><input id="sharpen" type="checkbox" checked> Sharpen</label>
@@ -154,7 +154,7 @@ section h2 .grow { flex: 1; }
     <section>
       <h2>On screen <span class="grow"></span><label class="hint"><input id="autoId" type="checkbox" checked> Identify automatically</label></h2>
       <div id="spotted"><div class="hint" id="spottedEmpty">No cards spotted yet.</div></div>
-      <div class="row"><label><input id="dbg" type="checkbox"> Show what the detector sees</label></div>
+      <div class="row"><label><input id="dbg" type="checkbox"> Show what the detector sees (and every detection)</label></div>
       <canvas id="dbgView" hidden></canvas>
     </section>
     <section id="historySec" hidden>

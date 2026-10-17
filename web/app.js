@@ -288,15 +288,8 @@ function chooseFocus() {
   const ids = new Set(S.tracks.map((t) => t.id));
   if (S.pinnedId && !ids.has(S.pinnedId)) S.pinnedId = null;
   const prev = S.focusId;
-  if (S.pinnedId) S.focusId = S.pinnedId;
-  else {
-    // Follow the biggest card: a card held up to the camera or zoomed by the streamer.
-    const best = S.tracks.slice().sort((a, b) => b.w * b.h - a.w * a.h)[0];
-    const cur = S.tracks.find((t) => t.id === prev);
-    // Stick with the current card unless another is clearly bigger, to avoid jumping around.
-    S.focusId = !best ? null : cur && cur.w * cur.h > best.w * best.h * 0.8 ? cur.id : best.id;
-  }
-  if (S.focusId !== prev && S.focusId && !S.manual) pushHistorySoon();
+  // The zoom shows only a card the viewer clicked; nothing is zoomed automatically.
+  S.focusId = S.pinnedId;
 }
 
 // Boxes and card overlays on the video. They are safe to draw only when they can't leak into
@@ -304,12 +297,16 @@ function chooseFocus() {
 const marksById = new Map();
 function confidentCard(id) {
   const c = id && id.card;
-  return c && (id.picked || id.forced || typeof c.match !== 'number' || c.match >= 0.5) ? c : null;
+  return c && (id.picked || id.forced || typeof c.match !== 'number' || c.match >= 0.6) ? c : null;
 }
 function renderMarks() {
   const safe = S.kind === 'direct' || (S.kind === 'capture' && S.restricted);
   const live = new Set();
+  // Only identified cards (and the one the viewer clicked) appear on the video, so stray
+  // detections on overlays, webcams or scenery stay out of the way. The detector view shows all.
+  const all = $('dbg').checked;
   if (safe) for (const t of S.tracks) {
+    if (!all && t.id !== S.focusId && !confidentCard(S.ids.get(t.id))) continue;
     live.add(t.id);
     let m = marksById.get(t.id);
     if (!m) {
@@ -436,7 +433,8 @@ function showBox(x, y, w, h) {
 function renderZoom(addToHistory) {
   const rect = currentRect();
   if (!rect) {
-    if (!S.manual && !S.tracks.length) { zoom.hidden = true; $('zoomEmpty').hidden = false; $('full').disabled = $('readName').disabled = true; }
+    zoom.hidden = true; $('zoomEmpty').hidden = false; $('full').disabled = $('readName').disabled = true;
+    updateZoomView();
     return;
   }
   const box = $('zoomBox').getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -461,7 +459,7 @@ function currentId() { const k = currentKey(); return k == null ? null : S.ids.g
 function updateZoomView() {
   const id = currentId(), card = id && id.card;
   // A weak look match is likely a misread name: keep the stream view unless the viewer asks.
-  const unsure = !!card && !id.picked && typeof card.match === 'number' && card.match < 0.5;
+  const unsure = !!card && !id.picked && typeof card.match === 'number' && card.match < 0.6;
   const showOfficial = !!card && S.view === 'official' && !zoom.hidden && (!unsure || id.forced);
   if (card && official.dataset.src !== (card.big || card.img)) {
     official.dataset.src = card.big || card.img;
