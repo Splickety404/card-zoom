@@ -114,6 +114,7 @@ const SOURCES = {
       let j;
       try { j = await getJSON(`https://api.swu-db.com/cards/${code}`); } catch (e) { console.log('swu set', code, e.message); continue; }
       const list = j.data || j.cards || [];
+      console.log('swu set', code, list.length, 'cards');
       if (list[0] && !cards.length) console.log('swu card fields:', Object.keys(list[0]).join(', '));
       for (const c of list) {
         const art = c.FrontArt || c.frontArt;
@@ -150,18 +151,25 @@ const ok = new Uint8Array(cards.length);
 const sampleIdx = new Set();
 while (sampleIdx.size < Math.min(SAMPLE, cards.length)) sampleIdx.add(Math.floor(Math.random() * cards.length));
 const sampleBufs = new Map();
-let next = 0, done = 0;
-async function worker() {
-  while (next < cards.length) {
-    const i = next++;
-    const buf = await getBuf(cards[i].small);
+let queue = [...cards.keys()], done = 0;
+async function worker(tries) {
+  while (queue.length) {
+    const i = queue.shift();
+    const buf = await getBuf(cards[i].small, tries);
     if (buf) {
       try { data.set(await fingerprint(buf), i * FP.RECORD); ok[i] = 1; if (sampleIdx.has(i)) sampleBufs.set(i, buf); } catch { /* bad image */ }
     }
     if (++done % 2000 === 0) console.log(done, '/', cards.length);
   }
 }
-await Promise.all(Array.from({ length: 16 }, worker));
+await Promise.all(Array.from({ length: 16 }, () => worker(4)));
+// Some hosts (SWU-DB's) throttle bursts: retry the misses slowly.
+queue = [...cards.keys()].filter((i) => !ok[i]);
+if (queue.length) {
+  console.log('retrying', queue.length, 'images that failed');
+  await Promise.all(Array.from({ length: 3 }, () => worker(7)));
+  console.log('still missing', [...ok].filter((x) => !x).length, 'e.g.', cards.find((c, i) => !ok[i])?.small);
+}
 
 // Keep only cards that fingerprinted.
 const keep = [...ok.keys()].filter((i) => ok[i]);
