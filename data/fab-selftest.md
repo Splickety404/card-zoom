@@ -1,16 +1,16 @@
 ## Picture index: fab
 
-16657 artworks, 1.2 MB. Chosen colour weight 2, max distance 48.7.
+16657 artworks, 1.2 MB. Chosen colour weight 3, max distance 64.3.
 
 ### Top-1 accuracy on degraded cards (by card height in px)
 
 | height | n | w=0.25 | w=0.5 | w=1 | w=1.5 | w=2 | w=3 | dist p50 / p95 (hits, chosen w) | margin p10 |
 |---|---|---|---|---|---|---|---|---|---|
-| 32 | 799 | 62.2% | 66.5% | 68.0% | 68.1% | 68.0% | 67.6% | 39.8 / 52.2 | 0.1 |
-| 48 | 799 | 63.6% | 66.5% | 67.6% | 67.3% | 67.6% | 67.6% | 37.2 / 49.7 | 0.1 |
-| 72 | 799 | 65.5% | 68.0% | 68.8% | 68.7% | 68.6% | 68.6% | 36.3 / 47.6 | 0.1 |
-| 120 | 799 | 68.3% | 69.0% | 69.1% | 69.2% | 69.5% | 69.5% | 31.1 / 42.0 | 0.1 |
+| 32 | 800 | 56.8% | 62.0% | 64.0% | 64.3% | 64.5% | 64.1% | 53.2 / 68.9 | 0.1 |
+| 48 | 800 | 59.9% | 63.4% | 64.6% | 65.1% | 65.3% | 65.6% | 49.2 / 64.8 | 0.1 |
+| 72 | 800 | 60.3% | 64.3% | 64.9% | 65.1% | 65.1% | 65.3% | 48.5 / 63.2 | 0.1 |
+| 120 | 800 | 64.9% | 66.1% | 65.9% | 65.9% | 66.0% | 66.3% | 41.3 / 55.0 | 0.1 |
 
-Non-card crops, best distance (chosen w): p05 56.2, p50 67.0, p90 77.3
+Non-card crops, best distance (chosen w): p05 74.0, p50 87.6, p90 102.5
 
-Share of cards identified correctly *and* under the cut-off: 32px 60.1%, 48px 63.7%, 72px 65.8%, 120px 69.3%
+Share of cards identified correctly *and* under the cut-off: 32px 56.1%, 48px 61.8%, 72px 62.4%, 120px 65.9%
