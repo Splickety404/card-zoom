@@ -44,7 +44,7 @@ During tab capture, drawing over the video needs Chrome 132+ (Element Capture), 
 
 ## Trained card detector
 
-`core/cardnet.js` runs a small trained detector (`models/cards-obb.onnx`, YOLO11n-OBB, about 11 MB) with ONNX Runtime Web in a background worker, loaded from a CDN on first use. It finds every card with its exact angle, including fanned hands, overlapping piles and upside-down cards, in any game, and the picture matcher then reads each card at that angle. If the model or runtime can't load, the page falls back to the edge-based detector in `core/detect.js` (also forced with `?classic`).
+`core/cardnet.js` runs a small trained detector (`models/cards-obb.onnx`, YOLO11n-OBB, about 11 MB) with ONNX Runtime Web in a background worker. The runtime is bundled in `vendor/ort/` (WebAssembly build, MIT), with a CDN copy as fallback. It finds every card with its exact angle, including fanned hands, overlapping piles and upside-down cards, in any game, and the picture matcher then reads each card at that angle. If the model or runtime can't load, the page says so and falls back to the edge-based detector in `core/detect.js` (also forced with `?classic`).
 
 The model is trained only on generated tables, so no hand-labelled footage is needed:
 - `tools/detector/fetch-cards.mjs` (GitHub Action `fetch-training-cards.yml`) downloads about 4,500 card images from Scryfall, pokemontcg.io, YGOPRODeck and Lorcast into the `training-cards` branch.
@@ -80,6 +80,7 @@ core/fingerprint.js picture fingerprints and matching
 core/match.js       quick look signatures (spotting a card that changed)
 core/lookup.js      card database search (unused by the page)
 core/ocr.js         card name reading (unused by the page)
+vendor/ort/         ONNX Runtime Web, bundled
 ```
 
 `core/` has no page state and no DOM lookups; each file adds itself to `window.CardZoom` and works as a classic script, so an extension content script or an app webview can load the same files. For a Manifest V3 extension, bundle tesseract.js locally (`CardZoom.ocr.setTesseractUrl(...)`), since remote scripts aren't allowed.

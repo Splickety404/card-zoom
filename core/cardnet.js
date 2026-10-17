@@ -1,7 +1,8 @@
 // Card Zoom core: trained card detector (YOLO11n-OBB, built by tools/detector/train.py from
 // synthetic tables). Finds cards in fanned stacks, overlapping piles and at any angle, which the
 // edge-based detector in detect.js can't separate. Runs with ONNX Runtime Web (WebAssembly),
-// loaded from a CDN on first use. Exposes window.CardZoom.cardnet.
+// loaded on first use from vendor/ort/ next to the page (or a CDN if that copy is missing).
+// Exposes window.CardZoom.cardnet.
 //
 // detect(source, region) resolves to the same shape as detect.detectCards (x, y, w, h, rotated,
 // score, in source pixels) plus `obb`: {cx, cy, cw, ch, angle} with cw/ch the card's own upright
@@ -9,7 +10,8 @@
 (function (root) {
   'use strict';
 
-  let ortUrl = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js';
+  // The WebAssembly-only build: half the download of the full one, and no WebGPU code.
+  let ortUrls = ['vendor/ort/ort.wasm.min.js', 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js'];
   let worker = null, loading = null, size = 640, ready = false, nextId = 0;
   const pending = new Map();
   const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
@@ -22,7 +24,7 @@
       const m = e.data;
       try {
         if (m.type === 'load') {
-          importScripts(m.ortUrl);
+          if (typeof ort === 'undefined') importScripts(m.ortUrl);
           ort.env.wasm.wasmPaths = m.ortUrl.replace(/[^/]*$/, '');
           ort.env.wasm.numThreads = 1;
           session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ['wasm'] });
@@ -53,7 +55,12 @@
           pending.delete(e.data.id);
           e.data.error ? p.fail(new Error(e.data.error)) : p.ok(e.data);
         };
-        const r = await call({ type: 'load', ortUrl, modelUrl: new URL(modelUrl, location.href).href });
+        const model = new URL(modelUrl, location.href).href;
+        let r, err;
+        for (const u of ortUrls) {
+          try { r = await call({ type: 'load', ortUrl: new URL(u, location.href).href, modelUrl: model }); break; } catch (e) { err = e; }
+        }
+        if (!r) throw err;
         size = r.size; ready = true;
       })().catch((e) => { loading = null; if (worker) worker.terminate(); worker = null; throw e; });
     }
@@ -134,5 +141,5 @@
   }
 
   root.CardZoom = root.CardZoom || {};
-  root.CardZoom.cardnet = { load, detect, ready: () => ready, setOrtUrl: (u) => { ortUrl = u; }, rotatedIou };
+  root.CardZoom.cardnet = { load, detect, ready: () => ready, setOrtUrl: (u) => { ortUrls = [u]; }, rotatedIou };
 })(typeof window !== 'undefined' ? window : self);

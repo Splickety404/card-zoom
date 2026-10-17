@@ -197,7 +197,10 @@ let netBusy = false, netLoading = false;
 function loadCardNet() {
   if (!CN || netLoading || params.has('classic')) return;
   netLoading = true;
-  CN.load('models/cards-obb.onnx').catch(() => {});
+  CN.load('models/cards-obb.onnx').catch((e) => {
+    console.warn('Card finder failed to load:', e);
+    status('The card finder could not load, so a simpler one is used and fewer cards will be found. Reload to try again.');
+  });
 }
 setInterval(() => {
   if (!S.video || !S.video.videoWidth || document.hidden) return;
