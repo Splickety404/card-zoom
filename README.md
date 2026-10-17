@@ -1,6 +1,6 @@
 # Card Zoom (prototype)
 
-A web page that plays a Twitch or YouTube card game stream, spots the cards on screen automatically, shows a large cleaned-up view of the one you care about, and looks up its full-resolution image in public card databases.
+A web page that plays a Twitch or YouTube card game stream, finds the cards on screen, recognises them, and draws each card's crisp official scan where it lies on the table. Hover a card to see it at a readable size; click it to open its database page.
 
 Live: https://splickety404.github.io/card-zoom/
 
@@ -17,9 +17,9 @@ python3 -m http.server 8000
 
 Open http://localhost:8000, paste a stream link, press **Load**, then **Start capture** and pick **this tab** in the browser's share dialog.
 
-To try it without a stream: http://localhost:8000/?demo (a fake table), or **Open video file** and pick `samples/synthetic-table.webm`.
+To try it without a stream: **Open video file** and pick a recording. `?demo` shows a drawn table (its cards aren't real, so add `&debug` to see what is spotted).
 
-Keys: `A` auto spot on/off, `Z` pick a card by hand, `L` live zoom, `F` full screen, `Esc` close.
+`O` hides or shows the cards drawn over the video. `?debug` also outlines detections that weren't recognised; `?classic` uses the edge-based detector instead of the trained one. Hover a card and press × if something that isn't a card gets drawn; that area is ignored for the rest of the video.
 
 ## Can the page read the stream? (feasibility)
 
@@ -36,23 +36,11 @@ What does work:
 
 The zoom can only be as sharp as the stream: a card that is 60 px tall in a 1080p stream is upscaled and sharpened, not restored. That is why the lookup matters: once a card is named, you see the official high-res scan.
 
-## How auto spotting works
+## How it works
 
-`core/detect.js`, no ML model and no library. Every 350 ms it scales the frame to 800 px wide, finds edges, groups them into blobs, and keeps blobs whose box has a trading card's shape (63×88, upright or tapped sideways) with strong edges on all four sides. A tracker keeps boxes steady across frames. The zoom follows the biggest card (usually one held up to the camera or shown in a card overlay) until you click a different one in the "On screen" strip, which pins it. Tapped cards are turned upright automatically.
+Every 350 ms the page finds the cards in the frame (the trained detector below, or `core/detect.js` as a fallback), a tracker keeps them steady across frames, and each steady card is recognised by its picture against one index per game. A recognised card's official scan is drawn over it, turned to lie like the card (tapped, tilted, or upside down for the far player), and follows it as it moves. Every couple of seconds each card is compared with how it looked when recognised, and recognised again if it changed. Cards that match nothing (webcams, overlays, unknown cards) are not drawn.
 
-**Identify automatically**: once the focused card has been steady for about 1.5 seconds (or when you click it), the page reads the name band at the top of the card with Tesseract.js (loaded from a CDN on first use), searches every database, then compares each result's scan with the stream crop (`core/match.js`) to pick the right card and printing. The zoom then shows the official high-res scan; **Stream** switches back to the enlarged crop. A weak picture match is shown as a "best guess" and the zoom stays on the stream view. Clicking any search result makes it the card's image.
-
-Small cards: detection works down to about 3% of the video height. Their names are usually too small to read, so a tiny card can be spotted but not always identified; picking it with a name search, or clicking a result, still gets the crisp scan. Identifying by picture alone (no name) would need a prebuilt image index of every card, which is the natural next step.
-
-Webcam boxes and people can be card-shaped, so larger candidates must also show straight rules across their face (name bar, art box, text box) to count. If something still gets picked up, hover its box and press × (or **Not a card** in the zoom panel) and that area is ignored for the rest of the video.
-
-**Overlay**: every identified card is drawn on top of the video at its position and follows it as it moves; tapped cards are turned to match. Every couple of seconds each card is compared with how it looked when identified, and re-identified if it changed. During tab capture this needs Chrome 132+ (Element Capture), which leaves the page's own overlays out of the captured frames; on older browsers overlays are off and cards show in the side panel only. `O` toggles overlays.
-
-Known limits, honestly stated:
-- Tested only on synthetic tables (the demo and the sample video), because this build environment can't reach YouTube, Twitch or the card APIs. Real streams with overlays, glare or sleeves will need tuning.
-- Cards that touch or overlap can merge into one box, or be missed.
-- Card-shaped stream overlays (some streamers' card popups) will be spotted too; that is often what you want.
-- OCR on stream-quality text is hit and miss. Scryfall's fuzzy match forgives small typos; the others less so.
+During tab capture, drawing over the video needs Chrome 132+ (Element Capture), which leaves the page's own drawings out of the captured frames.
 
 ## Trained card detector
 
@@ -67,30 +55,37 @@ Real broadcast screenshots used for checking live in the project's `benchmarks/`
 
 ## Card databases
 
-All free, no key, CORS enabled, called straight from the browser (`core/lookup.js`):
+Indexes are built from free public sources; the page loads card images straight from them:
 
-- Magic: Scryfall
-- Pokémon: pokemontcg.io
-- Yu-Gi-Oh!: YGOPRODeck (asks that apps don't hotlink images heavily; cache them before any real launch)
-- Lorcana: Lorcast
+| Game | Source | Images |
+|---|---|---|
+| Magic | Scryfall bulk data | cards.scryfall.io |
+| Pokémon | PokemonTCG/pokemon-tcg-data (GitHub) | images.pokemontcg.io |
+| Lorcana | Lorcast API | Lorcast |
+| Yu-Gi-Oh! | YGOPRODeck API | images.ygoprodeck.com (asks apps not to hotlink heavily; cache before any real launch) |
+| Star Wars: Unlimited | SWU-DB API | SWU-DB |
+| Flesh and Blood | the-fab-cube/flesh-and-blood-cards (GitHub) | Legend Story Studios |
 
-Other games get a TCGplayer search link. Adding a game is one entry in `GAMES`.
+`core/lookup.js` (name search) and `core/ocr.js` (name reading) are kept for an extension or app but the page no longer uses them.
 
 ## Layout, built to port to an extension or app
 
 ```
-index.html        page markup and styles
-web/app.js        page-only wiring: embeds, capture, buttons, panels
-core/zoom.js      selection <-> video pixel mapping, crop, upscale, sharpen, rotate
-core/detect.js    card detection and tracking
-core/lookup.js    card database search
-core/ocr.js       card name reading
+index.html          page markup and styles
+web/app.js          page-only wiring: embeds, capture, drawing cards, hover
+core/zoom.js        stage <-> video pixel mapping
+core/detect.js      edge-based card detection, and tracking
+core/cardnet.js     trained card detector (ONNX Runtime Web, in a worker)
+core/fingerprint.js picture fingerprints and matching
+core/match.js       quick look signatures (spotting a card that changed)
+core/lookup.js      card database search (unused by the page)
+core/ocr.js         card name reading (unused by the page)
 ```
 
 `core/` has no page state and no DOM lookups; each file adds itself to `window.CardZoom` and works as a classic script, so an extension content script or an app webview can load the same files. For a Manifest V3 extension, bundle tesseract.js locally (`CardZoom.ocr.setTesseractUrl(...)`), since remote scripts aren't allowed.
 
-## Picture recognition (Magic, Pokémon, Lorcana)
+## Picture recognition
 
-Reading names fails on broadcast footage, so cards are recognised by their picture. There is one index per game (`data/mtg`, `data/pokemon`, `data/lorcana`, from Scryfall, pokemontcg.io and Lorcast). The page tries every game until one is clearly the stream's, then only that one. `.github/workflows/build-index.yml` runs `tools/build-index.mjs` weekly (and on demand): it downloads every unique Magic artwork from Scryfall, fingerprints each image with `core/fingerprint.js` (a perceptual hash of the art plus a colour layout), and commits `data/mtg.bin` and `data/mtg.json`. It then self-tests on degraded copies of real cards (32 to 120 px tall, blurred, recompressed, re-lit) and on non-card crops, picks the colour weight and distance cut-off, and writes the results to `data/mtg-selftest.md` and the run summary.
+Reading names fails on broadcast footage, so cards are recognised by their picture. There is one index per game in `data/` (`mtg`, `pokemon`, `lorcana`, `yugioh`, `swu`, `fab`). The page tries every game until one is clearly the stream's, then only that one. `.github/workflows/build-index.yml` runs `tools/build-index.mjs` weekly (and on demand): for each game it downloads every card image, fingerprints it with `core/fingerprint.js` (a perceptual hash of the art plus a colour layout), and commits `data/GAME.bin` and `data/GAME.json`. It then self-tests on degraded copies of real cards (32 to 120 px tall, blurred, recompressed, re-lit) and on non-card crops, picks the colour weight and distance cut-off, and writes the results to `data/GAME-selftest.md` and the run summary.
 
-In the page, every steady detection is fingerprinted and matched against the index. Broadcast boxes are loose and cards are tilted, sleeved and often upside down (facing the other player), so each box is tried in many placements: upright and turned 180°, tilted up to 10°, a little smaller and shifted. A few coarse placements are searched across the whole index to shortlist candidates, the finer grid is scored against the shortlist only, and the winner is searched in full once more (about 0.1 s per card, spread over frames). A match must be close and clearly better than the next card; on loose matches a wide lead is required, which is what keeps webcams and notepads out. On a real SCG regional broadcast screenshot this took recognised table cards from 2 to 9 with no false matches. Cards that match nothing (webcams, overlays) are never shown. Name reading is now only a fallback for large cards.
+In the page, every steady detection is fingerprinted and matched against the index. Broadcast boxes are loose and cards are tilted, sleeved and often upside down (facing the other player), so each box is tried in many placements: upright and turned 180°, tilted up to 10°, a little smaller and shifted. A few coarse placements are searched across the whole index to shortlist candidates, the finer grid is scored against the shortlist only, and the winner is searched in full once more (about 0.1 s per card, spread over frames). A match must be close and clearly better than the next card; on loose matches a wide lead is required, which is what keeps webcams and notepads out. On a real SCG regional broadcast screenshot this took recognised table cards from 2 to 9 with no false matches. Cards that match nothing (webcams, overlays) are never shown.

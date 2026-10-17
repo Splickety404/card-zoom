@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,6 +31,12 @@ jobs:
       - run: node tools/build-index.mjs pokemon
         continue-on-error: true
       - run: node tools/build-index.mjs lorcana
+        continue-on-error: true
+      - run: node tools/build-index.mjs yugioh
+        continue-on-error: true
+      - run: node tools/build-index.mjs swu
+        continue-on-error: true
+      - run: node tools/build-index.mjs fab
         continue-on-error: true
       - name: Commit index
         run: |

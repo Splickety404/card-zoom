@@ -7,105 +7,51 @@
 <style>
 :root {
   --bg: #0f1115; --panel: #171a21; --panel-2: #1f232c; --line: #2c313c;
-  --text: #e8eaef; --muted: #9aa1ad; --accent: #7c9cff; --accent-2: #3d5afe;
-  --sel: #ffd166; --danger: #ff6b6b;
+  --text: #e8eaef; --muted: #9aa1ad; --accent: #7c9cff; --accent-2: #3d5afe; --sel: #ffd166;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #f4f5f8; --panel: #ffffff; --panel-2: #eef0f4; --line: #d8dce4;
-    --text: #1b1e25; --muted: #5d6573; --accent: #3d5afe; --accent-2: #2a44d8;
-    --sel: #e09f00; color-scheme: light;
+    --text: #1b1e25; --muted: #5d6573; --accent: #3d5afe; --accent-2: #2a44d8; --sel: #e09f00; color-scheme: light;
   }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
-button, input, select { font: inherit; color: inherit; }
+button, input { font: inherit; color: inherit; }
 button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-button:disabled { opacity: .45; cursor: default; }
-input[type=text], input[type=url], select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
-kbd { font: 11px ui-monospace, monospace; border: 1px solid currentColor; opacity: .7; border-radius: 4px; padding: 0 4px; color: var(--muted); }
+input[type=url] { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
 
-header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
 header h1 { font-size: 16px; margin: 0 8px 0 0; }
 header #url { flex: 1 1 320px; }
-.hint { color: var(--muted); font-size: 12px; }
+#status { color: var(--muted); font-size: 12px; padding: 4px 16px 0; min-height: 1.4em; }
+button.nudge { background: var(--accent-2); border-color: var(--accent-2); color: #fff; animation: nudge 1.6s ease-in-out infinite; }
+@keyframes nudge { 50% { box-shadow: 0 0 0 6px rgba(124,156,255,.35); } }
 
-main { flex: 1; display: flex; min-height: 0; }
-#left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-#toolbar .sep { width: 1px; height: 22px; background: var(--line); }
-#status { margin-left: auto; color: var(--muted); font-size: 12px; }
-#stageWrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0; }
+#stageWrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 8px 16px 16px; min-height: 0; }
 #stage { position: relative; width: 100%; max-height: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; overflow: hidden; }
-#stage iframe, #stage video, #stage canvas.src { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: contain; }
+#stage iframe, #stage video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: contain; }
+#media { position: absolute; inset: 0; isolation: isolate; transform-style: flat; }
 #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #9aa1ad; text-align: center; padding: 24px; }
-#overlay { position: absolute; inset: 0; cursor: crosshair; display: none; }
-#overlay.active { display: block; background: rgba(124,156,255,.06); outline: 2px dashed var(--accent); outline-offset: -2px; }
+
+/* Each recognised card: its official scan drawn where the card lies on the table. */
 #marks { position: absolute; inset: 0; pointer-events: none; }
-.mark { position: absolute; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; cursor: pointer;
-  transition: left .3s linear, top .3s linear, width .3s linear, height .3s linear; }
-.mark.focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,156,255,.4); }
-.mark.has-card { border-color: transparent; }
-.mark.has-card.focus { border-color: var(--accent); }
-.mark img { position: absolute; display: none; border-radius: 4.5% / 3.2%; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; }
+.mark { position: absolute; pointer-events: auto; transition: left .3s linear, top .3s linear, width .3s linear, height .3s linear; }
+.mark img { position: absolute; border-radius: 4.5% / 3.2%; box-shadow: 0 1px 6px rgba(0,0,0,.5); pointer-events: none; }
+.mark.debug { border: 2px dashed var(--sel); border-radius: 4px; }
 .mark .nc { position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 16px;
   background: var(--panel); color: var(--text); display: none; z-index: 1; }
 .mark:hover .nc { display: block; }
-#media { position: absolute; inset: 0; isolation: isolate; transform-style: flat; }
-@media (prefers-reduced-motion: reduce) { .mark { transition: none; } }
-#spotted { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; min-height: 40px; align-items: flex-start; }
-#spotted canvas { height: 84px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; flex: none; }
-#spotted canvas.focus { border-color: var(--accent); }
-#spotted canvas.pinned { border-color: var(--sel); }
-#dbgView { width: 100%; margin-top: 8px; border-radius: 4px; image-rendering: pixelated; }
-button.nudge { background: var(--accent-2); border-color: var(--accent-2); color: #fff; animation: nudge 1.6s ease-in-out infinite; }
-@keyframes nudge { 50% { box-shadow: 0 0 0 6px rgba(124,156,255,.35); } }
-@media (prefers-reduced-motion: reduce) { button.nudge { animation: none; } }
-#selbox { position: absolute; border: 2px solid var(--sel); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); display: none; pointer-events: none; }
-
-aside { width: 420px; max-width: 45vw; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
-section { padding: 12px; border-bottom: 1px solid var(--line); }
-section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-section h2 .grow { flex: 1; }
-#zoomBox { background: #000; border-radius: 6px; aspect-ratio: 63 / 88; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: zoom-in; }
-#zoom { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
-#official { max-width: 100%; max-height: 100%; border-radius: 4.5% / 3.2%; }
-#zoomCap { margin-top: 6px; min-height: 1.4em; }
-#zoomCap a { color: var(--accent); }
-.seg { display: inline-flex; text-transform: none; letter-spacing: 0; }
-.seg button { border-radius: 0; padding: 3px 8px; font-size: 12px; }
-.seg button:first-child { border-radius: 6px 0 0 6px; }
-.seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
-#zoomEmpty { color: #9aa1ad; padding: 16px; text-align: center; font-size: 13px; }
-.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-.row label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
-#history { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
-#history img { height: 72px; border-radius: 4px; border: 1px solid var(--line); cursor: pointer; }
-#lookupForm { display: flex; gap: 6px; }
-#q { flex: 1; }
-#results { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
-.card { position: relative; cursor: zoom-in; }
-.card img { width: 100%; border-radius: 6px; display: block; background: var(--panel-2); aspect-ratio: 63/88; object-fit: cover; }
-.card .badge { position: absolute; left: 4px; top: 4px; font-size: 10px; background: rgba(0,0,0,.7); color: #fff; padding: 1px 5px; border-radius: 3px; }
-.card .name { font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#lookupMsg { color: var(--muted); font-size: 12px; margin-top: 8px; }
-#lookupMsg a { color: var(--accent); }
-
-#lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; cursor: zoom-out; flex-direction: column; gap: 10px; }
-#lightbox.open { display: flex; }
-#lightbox img, #lightbox canvas { max-width: 96vw; max-height: 88vh; border-radius: 10px; }
-#lightbox .cap { color: #ddd; font-size: 13px; }
-
-@media (max-width: 860px) {
-  main { flex-direction: column; overflow: auto; }
-  aside { width: 100%; max-width: none; border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
-  #stageWrap { padding: 8px 16px; }
-}
+/* Hovering a card shows it upright at a readable size beside it. */
+#pop { position: absolute; display: none; pointer-events: none; z-index: 5; border-radius: 3.5% / 2.5%; box-shadow: 0 8px 30px rgba(0,0,0,.6); }
+#pop.open { display: block; }
+@media (prefers-reduced-motion: reduce) { .mark { transition: none; } button.nudge { animation: none; } }
+@media (max-width: 860px) { #stageWrap { padding: 8px 16px; } }
 </style>
 </head>
 <body>
@@ -113,82 +59,27 @@ section h2 .grow { flex: 1; }
   <h1>Card Zoom</h1>
   <input id="url" type="url" placeholder="Paste a YouTube or Twitch link, or a direct video URL" autocomplete="off">
   <button id="load" class="primary">Load</button>
-  <label class="hint"><input id="file" type="file" accept="video/*" hidden><button id="fileBtn" type="button">Open video file</button></label>
+  <button id="capture" title="Let the page see the stream's pixels (needed for YouTube and Twitch)">Start capture</button>
+  <input id="file" type="file" accept="video/*" hidden><button id="fileBtn" type="button">Open video file</button>
 </header>
-
-<main>
-  <div id="left">
-    <div id="toolbar">
-      <button id="capture" title="Let the page read the pixels of the stream (needed for YouTube and Twitch)">Start capture</button>
-      <span class="sep"></span>
-      <button id="auto" class="on" title="Find cards in the video automatically">Auto spot <kbd>A</kbd></button>
-      <button id="overlayBtn" class="on" title="Show identified cards on top of the video">Overlay <kbd>O</kbd></button>
-      <button id="selectMode" disabled title="Drag over a card in the video yourself">Pick manually <kbd>Z</kbd></button>
-      <button id="live" disabled title="Keep updating the zoom from the live video">Live <kbd>L</kbd></button>
-      <span id="status">Load a stream to begin.</span>
+<div id="status">Load a stream to begin.</div>
+<div id="stageWrap">
+  <div id="stage">
+    <div id="empty">
+      <div style="font-size:15px;color:#e8eaef">Paste a stream link above</div>
+      <div>Then press <b>Start capture</b> and choose <b>this tab</b>. Recognised cards appear sharp in place; hover one to read it.</div>
     </div>
-    <div id="stageWrap">
-      <div id="stage">
-        <div id="empty">
-          <div style="font-size:15px;color:#e8eaef">Paste a stream link above</div>
-          <div>YouTube and Twitch links (live or VOD) play here. Then press <b>Start capture</b> and choose <b>this tab</b>. Cards on screen are spotted automatically.</div>
-        </div>
-        <div id="media"></div>
-        <div id="marks"></div>
-        <div id="overlay"><div id="selbox"></div></div>
-      </div>
-    </div>
+    <div id="media"></div>
+    <div id="marks"></div>
+    <img id="pop" alt="">
   </div>
-
-  <aside>
-    <section>
-      <h2>Zoom <span class="seg"><button id="viewOfficial" disabled title="Official scan from the card database">Official</button><button id="viewStream" class="on" title="Enlarged crop from the stream">Stream</button></span><span class="grow"></span><button id="notCard" title="This isn't a card: ignore this area">Not a card</button><button id="readName" disabled title="Read the card name from the zoom and look it up">Read name</button><button id="full" disabled title="Full screen">Full <kbd>F</kbd></button></h2>
-      <div id="zoomBox"><canvas id="zoom" hidden></canvas><img id="official" hidden alt=""><div id="zoomEmpty">Click a card on the video, or in On screen below, to zoom it. You can also press Z and drag over a card.</div></div>
- <div id="zoomCap" class="hint"></div>
-      <div class="row">
-        <label><input id="sharpen" type="checkbox" checked> Sharpen</label>
-        <label><input id="contrast" type="checkbox"> Boost contrast</label>
-        <label><input id="rotate" type="checkbox"> Rotate 90°</label>
-      </div>
-    </section>
-    <section>
-      <h2>On screen <span class="grow"></span><label class="hint"><input id="autoId" type="checkbox" checked> Identify automatically</label></h2>
-      <div id="spotted"><div class="hint" id="spottedEmpty">No cards spotted yet.</div></div>
-      <div class="row"><label><input id="dbg" type="checkbox"> Show what the detector sees (and every detection)</label></div>
-      <canvas id="dbgView" hidden></canvas>
-    </section>
-    <section id="historySec" hidden>
-      <h2>Recent crops</h2>
-      <div id="history"></div>
-    </section>
-    <section>
-      <h2>Card lookup</h2>
-      <form id="lookupForm">
-        <select id="game" aria-label="Game">
-          <option value="all">All games</option>
-          <option value="mtg">Magic</option>
-          <option value="ptcg">Pokémon</option>
-          <option value="ygo">Yu-Gi-Oh!</option>
-          <option value="lorcana">Lorcana</option>
-        </select>
-        <input id="q" type="text" placeholder="Card name" autocomplete="off">
-        <button class="primary">Search</button>
-      </form>
-      <div id="lookupMsg">Spotted cards are looked up automatically and the official scan replaces the stream view. Click a result to use it instead. Click a result for a full size image.</div>
-      <div id="results"></div>
-    </section>
-  </aside>
-</main>
-
-<div id="lightbox"><div id="lbContent"></div><div class="cap" id="lbCap"></div></div>
+</div>
 
 <script src="core/zoom.js"></script>
 <script src="core/detect.js"></script>
 <script src="core/cardnet.js"></script>
-<script src="core/lookup.js"></script>
 <script src="core/match.js"></script>
 <script src="core/fingerprint.js"></script>
-<script src="core/ocr.js"></script>
 <script src="web/app.js"></script>
 <script>
 // If the script files next to this page didn't load (page opened on its own), say so instead of doing nothing.
@@ -197,6 +88,5 @@ if (!window.CardZoom) {
   document.getElementById('load').onclick = () => alert('This copy of the page is missing its script files (core/ and web/). Open card-zoom.html, which has everything in one file.');
 }
 </script>
-
 </body>
 </html>

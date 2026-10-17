@@ -1,6 +1,7 @@
 // Builds a picture index for one game (data/GAME.bin + data/GAME.json) from its public card
 // database, then self-tests it on degraded copies of real cards (small, blurred, recompressed,
-// re-lit) and reports accuracy. Games: mtg (Scryfall), pokemon (pokemontcg.io), lorcana (Lorcast).
+// re-lit) and reports accuracy. Games: mtg (Scryfall), pokemon (pokemontcg.io data), lorcana (Lorcast),
+// yugioh (YGOPRODeck), swu (SWU-DB), fab (the-fab-cube data).
 // Runs in GitHub Actions (.github/workflows/build-index.yml). Needs Node 20+ and `sharp`.
 // Usage: node tools/build-index.mjs [GAME] [--limit N]
 import { createRequire } from 'node:module';
@@ -35,7 +36,10 @@ async function getBuf(url, tries = 4) {
   }
 }
 async function fingerprint(buf) {
-  const raw = await sharp(buf).resize(FP.FW, FP.FH, { fit: 'fill' }).removeAlpha().raw().toBuffer();
+  // Landscape cards (Star Wars leaders and bases, Magic battles) are stood up, as the detector
+  // reports every card with its long side as height; the page tries both ways up.
+  const { width, height } = await sharp(buf).metadata();
+  const raw = await sharp(buf).rotate(width > height ? 90 : 0).resize(FP.FW, FP.FH, { fit: 'fill' }).removeAlpha().raw().toBuffer();
   return FP.describe(raw, 3);
 }
 
@@ -93,6 +97,47 @@ const SOURCES = {
       await new Promise((ok) => setTimeout(ok, 120)); // Lorcast asks for 50-100 ms between requests
     }
     return { source: 'Lorcast', cards };
+  },
+  async yugioh() {
+    const j = await getJSON('https://db.ygoprodeck.com/api/v7/cardinfo.php');
+    const cards = [];
+    for (const c of j.data) for (const im of c.card_images || []) cards.push({
+      name: c.name, set: c.card_sets?.[0]?.set_code?.split('-')[0] || '', num: String(im.id), small: im.image_url_small,
+      img: im.image_url, big: im.image_url, link: `https://ygoprodeck.com/card/?search=${encodeURIComponent(c.name)}`,
+    });
+    return { source: 'YGOPRODeck', cards };
+  },
+  async swu() {
+    // SWU-DB lists cards per set; unknown set codes just return nothing.
+    const cards = [], seen = new Set();
+    for (const code of ['sor', 'shd', 'twi', 'jtl', 'lof', 'sec', 'law', 'ibh', 'c24', 'c25', 'j24', 'j25', 'p25', 'twis', 'sors', 'shds']) {
+      let j;
+      try { j = await getJSON(`https://api.swu-db.com/cards/${code}`); } catch (e) { console.log('swu set', code, e.message); continue; }
+      const list = j.data || j.cards || [];
+      if (list[0] && !cards.length) console.log('swu card fields:', Object.keys(list[0]).join(', '));
+      for (const c of list) {
+        const art = c.FrontArt || c.frontArt;
+        if (!art || seen.has(art)) continue;
+        seen.add(art);
+        const name = c.Subtitle ? `${c.Name} - ${c.Subtitle}` : c.Name;
+        cards.push({ name, set: c.Set || code.toUpperCase(), num: String(c.Number || ''), small: art, img: art, big: art,
+          link: `https://swu-db.com/card/${c.Set || code}/${c.Number || ''}` });
+      }
+      await new Promise((ok) => setTimeout(ok, 200));
+    }
+    return { source: 'SWU-DB', cards };
+  },
+  async fab() {
+    const all = await getJSON('https://raw.githubusercontent.com/the-fab-cube/flesh-and-blood-cards/develop/json/english/card.json');
+    const cards = [], seen = new Set();
+    for (const c of all) for (const p of c.printings || []) {
+      if (!p.image_url || seen.has(p.image_url)) continue;
+      seen.add(p.image_url);
+      const name = c.color ? `${c.name} (${c.color})` : c.name;
+      cards.push({ name, set: p.set_id, num: p.id, small: p.image_url, img: p.image_url, big: p.image_url,
+        link: `https://fabrary.net/cards?query=${encodeURIComponent(c.name)}` });
+    }
+    return { source: 'the-fab-cube', cards };
   },
 };
 const { source, cards: listed } = await SOURCES[GAME]();
