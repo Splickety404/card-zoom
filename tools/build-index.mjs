@@ -56,17 +56,29 @@ async function loadBulk(e) {
   if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf); // fetch may already have decoded it
   return buf.toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
 }
+// Formats a Magic card is legal in, as bits, so the page can search only cards a stream's format allows.
+const FORMATS = ['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'pauper', 'commander'];
+const formatBits = (leg = {}) => FORMATS.reduce((b, f, i) => (leg[f] === 'legal' || leg[f] === 'restricted' ? b | (1 << i) : b), 0);
 const SOURCES = {
   async mtg() {
+    // Every printing whose picture differs: the same artwork in an old border, a showcase or
+    // extended-art frame, or borderless lays the card out differently, and a stream shows
+    // whichever copy the player owns. (unique_artwork keeps only one frame per artwork.)
     const bulk = await getJSON('https://api.scryfall.com/bulk-data');
-    const entry = bulk.data.find((b) => b.type === 'unique_artwork') || bulk.data.find((b) => b.type === 'default_cards');
-    const all = await loadBulk(entry);
-    return { source: 'Scryfall unique_artwork', cards: all.filter((c) => c.layout !== 'art_series' && (c.image_uris || c.card_faces?.[0]?.image_uris))
-      .map((c) => ({
-        name: c.card_faces?.length && !c.image_uris ? c.card_faces[0].name : c.name,
-        set: c.set, num: c.collector_number, id: c.id,
-        small: (c.image_uris || c.card_faces[0].image_uris).small,
-      })) };
+    const all = await loadBulk(bulk.data.find((b) => b.type === 'default_cards'));
+    const LOOKS = ['showcase', 'extendedart', 'inverted', 'etched', 'shatteredglass', 'borderless'];
+    const seen = new Set(), cards = [];
+    for (const c of all) {
+      if (c.layout === 'art_series' || c.digital || !(c.image_uris || c.card_faces?.[0]?.image_uris)) continue;
+      const art = c.illustration_id || c.card_faces?.[0]?.illustration_id || c.id;
+      const key = [art, c.frame, c.border_color, c.full_art, c.textless, (c.frame_effects || []).filter((e) => LOOKS.includes(e)).sort().join('+')].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cards.push({ name: c.card_faces?.length && !c.image_uris ? c.card_faces[0].name : c.name,
+        set: c.set, num: c.collector_number, id: c.id, small: (c.image_uris || c.card_faces[0].image_uris).small,
+        formats: formatBits(c.legalities) });
+    }
+    return { source: 'Scryfall default_cards, one per artwork and frame', cards };
   },
   async pokemon() {
     // The pokemontcg.io API pages fail under load; its data repository has the same cards as
@@ -177,7 +189,7 @@ if (queue.length) {
 const keep = [...ok.keys()].filter((i) => ok[i]);
 const outData = new Uint8Array(keep.length * FP.RECORD);
 keep.forEach((i, k) => outData.set(data.subarray(i * FP.RECORD, (i + 1) * FP.RECORD), k * FP.RECORD));
-const meta = keep.map((i) => GAME === 'mtg' ? [cards[i].name, cards[i].set, cards[i].num, cards[i].id]
+const meta = keep.map((i) => GAME === 'mtg' ? [cards[i].name, cards[i].set, cards[i].num, cards[i].id, cards[i].formats]
   : [cards[i].name, cards[i].set, cards[i].num, cards[i].img, cards[i].big, cards[i].link]);
 const index = { data: outData, meta };
 await mkdir('data', { recursive: true });
@@ -233,7 +245,7 @@ const hits = [...results[48].dHit[weight], ...results[72].dHit[weight]];
 const maxDist = Math.min(Number(pct(hits, 0.95)), Number(pct(nonCard[weight], 0.05)));
 await writeFile(`data/${GAME}.bin`, outData); // written together, so a failed run leaves the old pair
 await writeFile(`data/${GAME}.json`, JSON.stringify({ built: new Date().toISOString(), game: GAME, source, record: FP.RECORD,
-  count: meta.length, weight, maxDist, minMargin: 1, cards: meta }));
+  count: meta.length, weight, maxDist, minMargin: 1, ...(GAME === 'mtg' ? { formats: FORMATS } : {}), cards: meta }));
 
 let md = `## Picture index: ${GAME}\n\n${meta.length} artworks, ${(outData.length / 1e6).toFixed(1)} MB. Chosen colour weight ${weight}, max distance ${maxDist}.\n\n`;
 md += `### Top-1 accuracy on degraded cards (by card height in px)\n\n| height | n | ${weights.map((w) => 'w=' + w).join(' | ')} | dist p50 / p95 (hits, chosen w) | margin p10 |\n|---|---|${weights.map(() => '---').join('|')}|---|---|\n`;
