@@ -382,13 +382,16 @@ const seenFormats = new Map(); // card name -> legality bits, for named Magic ca
 const namedOnStream = new Set(); // 'game|name' of every card named since the video was loaded
 function updateFormat(ix) {
   const names = ix.info.formats;
-  if (!names || seenFormats.size < 5) return;
+  // Tokens and helper cards (a substitute for a double-faced card) are legal nowhere and
+  // turn up in every format, so they neither vote nor get narrowed away.
+  const bits = [...seenFormats.values()].filter((b) => b);
+  if (!names || bits.length < 5) return;
   for (const f of NARROWING) {
     const bit = 1 << names.indexOf(f);
-    if (names.indexOf(f) < 0 || ![...seenFormats.values()].every((b) => b & bit)) continue;
+    if (names.indexOf(f) < 0 || !bits.every((b) => b & bit)) continue;
     if (ix.format === f) return;
     ix.format = f;
-    ix.narrow = Uint8Array.from(ix.meta, (row) => (row[4] & bit ? 1 : 0));
+    ix.narrow = Uint8Array.from(ix.meta, (row) => (!row[4] || row[4] & bit ? 1 : 0));
     return;
   }
 }
