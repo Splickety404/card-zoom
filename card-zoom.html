@@ -881,7 +881,10 @@ const S = {
 };
 const tracker = D.createTracker();
 
-function status(msg) { $('status').textContent = msg; }
+// A message from an action stays until the next one; while the page is just watching, the line
+// instead shows what it is doing, so a viewer can see where it gets stuck.
+let statusIsLive = false;
+function status(msg, live = false) { $('status').textContent = msg; statusIsLive = live; }
 
 // ---------- Loading sources ----------
 function parseSource(raw) {
@@ -956,7 +959,7 @@ function loadDirect(url) {
   v.src = url;
   v.addEventListener('loadedmetadata', () => {
     stage.style.aspectRatio = `${v.videoWidth} / ${v.videoHeight}`;
-    status('Watching for cards.');
+    status('Watching for cards.', true);
   });
   v.addEventListener('error', () => status('That video could not be loaded. Its host may block reading it; try Start capture instead.'));
   useVideoElement(v);
@@ -999,8 +1002,9 @@ async function startCapture() {
   S.video = v; S.kind = 'capture';
   resetSpotting();
   track.addEventListener('ended', () => stopCapture());
-  status(S.restricted ? 'Watching for cards.'
-    : S.cropped ? 'Cards can only be drawn over the video in Chrome 132 or newer. Update Chrome to see them.'
+  if (S.restricted) status('Watching for cards.', true);
+  else status(S.cropped
+    ? 'Cards can only be drawn over the video in Chrome 132 or newer. Update Chrome to see them.'
     : 'Capturing. If you picked another tab or window, cards will land in the wrong place: pick "this tab".');
   updateButtons();
 }
@@ -1047,14 +1051,40 @@ function toStage(b) {
 // The trained detector (models/cards-obb.onnx) is used once it has loaded; until then, or if it
 // can't load (offline, old browser, ?classic), the edge-based detector in core/detect.js.
 const DETECT_MS = 350;
-let netBusy = false, netLoading = false;
+let netBusy = false, netState = null; // null, 'loading', 'ready', 'failed'
 function loadCardNet() {
-  if (!CN || netLoading || params.has('classic')) return;
-  netLoading = true;
-  CN.load('models/cards-obb.onnx').catch((e) => {
+  if (!CN || netState || params.has('classic')) return;
+  netState = 'loading';
+  CN.load('models/cards-obb.onnx').then(() => { netState = 'ready'; }).catch((e) => {
     console.warn('Card finder failed to load:', e);
-    status('The card finder could not load, so a simpler one is used and fewer cards will be found. Reload to try again.');
+    netState = 'failed';
   });
+}
+// What the page is doing right now, in one line.
+function liveStatus(dets) {
+  if (!statusIsLive) return;
+  const parts = [];
+  if (netState === 'loading') parts.push('Loading the card finder…');
+  if (netState === 'failed') parts.push('The card finder could not load, so a simpler one is used.');
+  const want = PICTURE_GAMES.length, have = Object.keys(pictureIndexes).length;
+  const failed = PICTURE_GAMES.filter((g) => indexState[g] === 'failed');
+  if (have < want) parts.push(`Card lists loaded: ${have} of ${want}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}.`);
+  const named = S.tracks.filter((t) => S.ids.has(t.id)).length;
+  parts.push(dets.length ? `${dets.length} cards spotted, ${named} recognised.` : blankFrame() ? 'The captured video looks blank.' : 'No cards spotted yet.');
+  status(parts.join(' '), true);
+}
+// A capture that only delivers black frames looks like "no cards"; say so instead.
+const probe = document.createElement('canvas');
+function blankFrame() {
+  try {
+    probe.width = 32; probe.height = 18;
+    const c = probe.getContext('2d', { willReadFrequently: true });
+    c.drawImage(S.video, 0, 0, 32, 18);
+    const d = c.getImageData(0, 0, 32, 18).data;
+    let max = 0;
+    for (let i = 0; i < d.length; i += 4) max = Math.max(max, d[i], d[i + 1], d[i + 2]);
+    return max < 12;
+  } catch { return false; }
 }
 setInterval(() => {
   if (!S.video || !S.video.videoWidth || document.hidden) return;
@@ -1081,6 +1111,7 @@ function afterDetect(dets, region) {
   if (++S.tick % 6 === 0) recheckIdentities();
   recognise();
   renderMarks();
+  if (S.tick % 3 === 0) liveStatus(dets);
 }
 
 // ---------- "Not a card" ----------
@@ -1117,11 +1148,16 @@ function recheckIdentities() {
 // and served with the page. A game whose index is missing is simply not recognised.
 const PICTURE_GAMES = ['mtg', 'pokemon', 'lorcana', 'yugioh', 'swu', 'fab'];
 const pictureIndexes = {}, gameHits = {};
-let indexesLoading = false;
+const indexState = {}; // game -> 'loading' | 'failed', removed once loaded
 function loadPictureIndexes() {
-  if (indexesLoading || !F) return;
-  indexesLoading = true;
-  for (const g of PICTURE_GAMES) F.loadIndex('data/' + g).then((ix) => { pictureIndexes[g] = ix; gameHits[g] = 0; }).catch(() => {});
+  if (!F) return;
+  for (const g of PICTURE_GAMES) {
+    if (pictureIndexes[g] || indexState[g] === 'loading') continue;
+    if (indexState[g] === 'failed' && S.tick % 60) continue; // retry a failed list now and then
+    indexState[g] = 'loading';
+    F.loadIndex('data/' + g).then((ix) => { pictureIndexes[g] = ix; gameHits[g] = 0; delete indexState[g]; })
+      .catch((e) => { console.warn('Card list for', g, 'failed to load:', e); indexState[g] = 'failed'; });
+  }
 }
 // Games to try for a card: the one this stream has been matching, alone, once it is clear;
 // otherwise every game, most-matched first.
