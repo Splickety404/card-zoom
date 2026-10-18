@@ -55,7 +55,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); seenFormats.clear(); namedOnStream.clear(); if (pictureIndexes.mtg) pictureIndexes.mtg.narrow = pictureIndexes.mtg.format = null; S.excluded = []; S.hover = null;
+  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); embedTries.clear(); seenFormats.clear(); namedOnStream.clear(); if (pictureIndexes.mtg) pictureIndexes.mtg.narrow = pictureIndexes.mtg.format = null; S.excluded = []; S.hover = null;
   renderMarks();
 }
 
@@ -202,7 +202,12 @@ let netBusy = false, netState = null; // null, 'loading', 'ready', 'failed'
 function loadCardNet() {
   if (!CN || netState || params.has('classic')) return;
   netState = 'loading';
-  CN.load('models/cards-obb.onnx').then(() => { netState = 'ready'; }).catch((e) => {
+  CN.load('models/cards-obb.onnx').then(() => {
+    netState = 'ready';
+    // The learned matcher shares the detector's runtime; it is used for games whose card list
+    // has embeddings (built when models/card-embed.onnx exists).
+    if (!params.has('hashonly')) CN.loadEmbed('models/card-embed.onnx').catch((e) => console.warn('Card matcher failed to load:', e));
+  }).catch((e) => {
     console.warn('Card finder failed to load:', e);
     netState = 'failed';
   });
@@ -306,7 +311,15 @@ function loadPictureIndexes() {
     if (pictureIndexes[g] || indexState[g] === 'loading') continue;
     if (indexState[g] === 'failed' && S.tick % 60) continue; // retry a failed list now and then
     indexState[g] = 'loading';
-    F.loadIndex('data/' + g).then((ix) => { pictureIndexes[g] = ix; gameHits[g] = 0; delete indexState[g]; })
+    F.loadIndex('data/' + g).then(async (ix) => {
+      if (ix.info.embedding) {
+        try {
+          const r = await fetch('data/' + g + '.emb');
+          if (r.ok) ix.emb = new Int8Array(await r.arrayBuffer());
+        } catch { /* fall back to picture hashes */ }
+      }
+      pictureIndexes[g] = ix; gameHits[g] = 0; delete indexState[g];
+    })
       .catch((e) => { console.warn('Card list for', g, 'failed to load:', e); indexState[g] = 'failed'; });
   }
 }
@@ -409,6 +422,62 @@ function identifyByPicture(t, game) {
   }
   return false;
 }
+// ---------- Learned matcher ----------
+// A trained network (tools/matcher/train_embed.py) turns each card crop into 128 numbers that
+// stay close for the same card through blur, glare, sleeves and tiny sizes. It runs alongside
+// the picture hashes, one card at a time in the background worker: the crop upright and turned
+// round, at two sizes, compared with every card of each game that has embeddings.
+let embedBusy = false;
+const embedTries = new Map();
+function embedGames() { return gamesToTry().filter((g) => pictureIndexes[g].emb); }
+function embedSearch(ix, q, off) {
+  const D = ix.info.embedding.dim, emb = ix.emb, n = ix.meta.length, k = ix.info.embedding.scale, allow = ix.allow;
+  let b1 = -1, s1 = -9, b2 = -1, s2 = -9;
+  for (let r = 0; r < n; r++) {
+    if (allow && !allow[r]) continue;
+    let dot = 0; const o = r * D;
+    for (let j = 0; j < D; j++) dot += q[off + j] * emb[o + j];
+    if (dot > s1) { if (b1 >= 0 && ix.meta[b1][0] !== ix.meta[r][0]) { b2 = b1; s2 = s1; } b1 = r; s1 = dot; }
+    else if (dot > s2 && ix.meta[r][0] !== ix.meta[b1][0]) { b2 = r; s2 = dot; }
+  }
+  return { i: b1, s: s1 / k, gap: (s1 - s2) / k };
+}
+setInterval(async () => {
+  if (embedBusy || !S.video || document.hidden || !CN || !CN.embedReady()) return;
+  const games = embedGames();
+  if (!games.length) return;
+  const t = S.tracks.filter((t) => t.hits >= 3 && t.obb && !S.ids.has(t.id) && (embedTries.get(t.id) || 0) < 4)
+    .sort((a, b) => (b.id === S.hover) - (a.id === S.hover) || (embedTries.get(a.id) || 0) - (embedTries.get(b.id) || 0) || b.w * b.h - a.w * a.h)[0];
+  if (!t) return;
+  embedBusy = true;
+  embedTries.set(t.id, (embedTries.get(t.id) || 0) + 1);
+  try {
+    const o = t.obb, boxes = [];
+    for (const flip of [0, 180]) for (const sc of [0.96, 1.04]) boxes.push({ cx: o.cx, cy: o.cy, cw: o.cw * sc, ch: o.ch * sc, angle: o.angle + flip });
+    const q = await CN.embed(S.video, boxes), D = 128;
+    if (S.ids.has(t.id) || !S.tracks.some((x) => x.id === t.id)) return;
+    for (const game of games) {
+      const ix = pictureIndexes[game], E = ix.info.embedding;
+      ix.allow = ix.narrow && (embedTries.get(t.id) % 2 === 1) ? ix.narrow : null;
+      let best = null, flip = 0;
+      boxes.forEach((b, k) => {
+        const r = embedSearch(ix, q, k * D);
+        if (!best || r.s > best.s) { best = r; flip = k < 2 ? 0 : 180; }
+      });
+      ix.allow = null;
+      const near = S.near.get(t.id);
+      if (!near || near.emb === undefined || best.s > near.emb) S.near.set(t.id, { ...(near || { d: 99, margin: 0, maxDist: 1 }), name: ix.meta[best.i][0], emb: best.s, game });
+      const seen = namedOnStream.has(game + '|' + ix.meta[best.i][0]);
+      if (best.s < E.minSim || best.gap < (seen ? 0 : E.minGap)) continue;
+      namedOnStream.add(game + '|' + ix.meta[best.i][0]);
+      gameHits[game] += 2;
+      if (game === 'mtg' && ix.meta[best.i][4] != null) { seenFormats.set(ix.meta[best.i][0], ix.meta[best.i][4]); updateFormat(ix); }
+      S.ids.set(t.id, { card: pictureCard(game, ix.meta[best.i]), flip, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
+      renderMarks();
+      break;
+    }
+  } catch (e) { console.warn('Card matcher:', e); } finally { embedBusy = false; }
+}, 100);
 function pictureCard(game, row) {
   if (game === 'mtg') {
     // Magic rows hold the Scryfall id; image URLs follow from it.
@@ -446,7 +515,7 @@ function renderMarks() {
     m.classList.toggle('debug', !id);
     if (DEBUG && !id) {
       const n = S.near.get(t.id);
-      m.dataset.near = n ? `${n.name} ${n.d.toFixed(0)}/${n.maxDist.toFixed(0)} m${n.margin.toFixed(0)} (${S.tries.get(t.id) || 0})` : `not tried (${t.hits} hits)`;
+      m.dataset.near = n ? `${n.name} ${n.d.toFixed(0)}/${n.maxDist.toFixed(0)} m${n.margin.toFixed(0)}${n.emb !== undefined ? ' e' + n.emb.toFixed(2) : ''} (${S.tries.get(t.id) || 0})` : `not tried (${t.hits} hits)`;
     } else delete m.dataset.near;
     m.title = id ? `${id.card.name}${id.card.set ? ' (' + id.card.set + ')' : ''}` : '';
     m.style.cursor = id && id.card.link ? 'pointer' : 'default';

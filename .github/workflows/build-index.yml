@@ -6,7 +6,7 @@ on:
     - cron: '17 6 * * 1' # weekly, to pick up new sets
   push:
     branches: [main]
-    paths: ['core/fingerprint.js', 'tools/build-index.mjs']
+    paths: ['core/fingerprint.js', 'tools/build-index.mjs', 'models/card-embed.onnx']
 
 permissions:
   contents: write
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-save sharp@0.33.5
+      - run: npm install --no-save sharp@0.33.5 onnxruntime-node@1.20.1
       # One index per game; a game whose database is down keeps last week's index.
       - run: node tools/build-index.mjs mtg
         continue-on-error: true

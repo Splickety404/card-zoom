@@ -47,14 +47,23 @@ async function fingerprint(buf) {
 // ---- 1. Card list: one entry per artwork ----
 // Each card: name, set, num, small (image to fingerprint), and for games other than Magic the
 // URLs the page shows (Magic's are rebuilt from the Scryfall id to keep the index small).
-async function loadBulk(e) {
+async function loadBulk(e, keep = (c) => c) {
   // Scryfall offers the file as JSON (download_uri) or gzipped JSON Lines (jsonl_download_uri).
-  if (e.download_uri) return getJSON(e.download_uri);
+  if (e.download_uri) return (await getJSON(e.download_uri)).map(keep).filter(Boolean);
   const r = await fetch(e.jsonl_download_uri, { headers: { 'User-Agent': UA['User-Agent'] } });
   if (!r.ok) throw new Error(`${r.status} ${e.jsonl_download_uri}`);
   let buf = Buffer.from(await r.arrayBuffer());
   if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf); // fetch may already have decoded it
-  return buf.toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+  // default_cards is bigger than the longest string Node allows: parse it line by line.
+  const out = [];
+  for (let start = 0; start < buf.length;) {
+    let end = buf.indexOf(10, start);
+    if (end < 0) end = buf.length;
+    const line = buf.toString('utf8', start, end).trim();
+    if (line && line !== '[' && line !== ']') { const c = keep(JSON.parse(line.replace(/,$/, ''))); if (c) out.push(c); }
+    start = end + 1;
+  }
+  return out;
 }
 // Formats a Magic card is legal in, as bits, so the page can search only cards a stream's format allows.
 const FORMATS = ['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'pauper', 'commander'];
@@ -65,19 +74,19 @@ const SOURCES = {
     // extended-art frame, or borderless lays the card out differently, and a stream shows
     // whichever copy the player owns. (unique_artwork keeps only one frame per artwork.)
     const bulk = await getJSON('https://api.scryfall.com/bulk-data');
-    const all = await loadBulk(bulk.data.find((b) => b.type === 'default_cards'));
     const LOOKS = ['showcase', 'extendedart', 'inverted', 'etched', 'shatteredglass', 'borderless'];
-    const seen = new Set(), cards = [];
-    for (const c of all) {
-      if (c.layout === 'art_series' || c.digital || !(c.image_uris || c.card_faces?.[0]?.image_uris)) continue;
+    const seen = new Set();
+    // Each card is cut down to what the index needs as it is read, to keep memory low.
+    const cards = await loadBulk(bulk.data.find((b) => b.type === 'default_cards'), (c) => {
+      if (c.layout === 'art_series' || c.digital || !(c.image_uris || c.card_faces?.[0]?.image_uris)) return null;
       const art = c.illustration_id || c.card_faces?.[0]?.illustration_id || c.id;
       const key = [art, c.frame, c.border_color, c.full_art, c.textless, (c.frame_effects || []).filter((e) => LOOKS.includes(e)).sort().join('+')].join('|');
-      if (seen.has(key)) continue;
+      if (seen.has(key)) return null;
       seen.add(key);
-      cards.push({ name: c.card_faces?.length && !c.image_uris ? c.card_faces[0].name : c.name,
+      return { name: c.card_faces?.length && !c.image_uris ? c.card_faces[0].name : c.name,
         set: c.set, num: c.collector_number, id: c.id, small: (c.image_uris || c.card_faces[0].image_uris).small,
-        formats: formatBits(c.legalities) });
-    }
+        formats: formatBits(c.legalities) };
+    });
     return { source: 'Scryfall default_cards, one per artwork and frame', cards };
   },
   async pokemon() {
@@ -159,7 +168,25 @@ const cards = listed.slice(0, LIMIT);
 console.log(GAME, cards.length, 'artworks');
 
 // ---- 2. Fingerprint every card image ----
+// With models/card-embed.onnx (tools/matcher/train_embed.py) and onnxruntime-node installed,
+// each card also gets a learned embedding: 128 numbers, stored as int8 in data/GAME.emb.
+const EMB = { W: 96, H: 128, DIM: 128, SCALE: 400 };
+let embSession = null, ort = null;
+try {
+  ort = await import('onnxruntime-node');
+  embSession = await ort.InferenceSession.create('models/card-embed.onnx');
+  console.log('embedding cards with models/card-embed.onnx');
+} catch (e) { console.log('no embeddings:', e.message.split('\n')[0]); }
+async function embed(buf) {
+  const { width, height } = await sharp(buf).metadata();
+  const raw = await sharp(buf).rotate(width > height ? 90 : 0).resize(EMB.W, EMB.H, { fit: 'fill', kernel: 'linear' }).removeAlpha().raw().toBuffer();
+  const N = EMB.W * EMB.H, x = new Float32Array(3 * N);
+  for (let i = 0; i < N; i++) { x[i] = raw[i * 3] / 255; x[N + i] = raw[i * 3 + 1] / 255; x[2 * N + i] = raw[i * 3 + 2] / 255; }
+  const out = await embSession.run({ image: new ort.Tensor('float32', x, [1, 3, EMB.H, EMB.W]) });
+  return Int8Array.from(out.embedding.data, (v) => Math.max(-127, Math.min(127, Math.round(v * EMB.SCALE))));
+}
 const data = new Uint8Array(cards.length * FP.RECORD);
+const emb = embSession ? new Int8Array(cards.length * EMB.DIM) : null;
 const ok = new Uint8Array(cards.length);
 const sampleIdx = new Set();
 while (sampleIdx.size < Math.min(SAMPLE, cards.length)) sampleIdx.add(Math.floor(Math.random() * cards.length));
@@ -170,7 +197,11 @@ async function worker(tries, until = Infinity) {
     const i = queue.shift();
     const buf = await getBuf(cards[i].small, tries);
     if (buf) {
-      try { data.set(await fingerprint(buf), i * FP.RECORD); ok[i] = 1; if (sampleIdx.has(i)) sampleBufs.set(i, buf); } catch { /* bad image */ }
+      try {
+        data.set(await fingerprint(buf), i * FP.RECORD);
+        if (emb) emb.set(await embed(buf), i * EMB.DIM);
+        ok[i] = 1; if (sampleIdx.has(i)) sampleBufs.set(i, buf);
+      } catch { /* bad image */ }
     }
     if (++done % 2000 === 0) console.log(done, '/', cards.length);
   }
@@ -192,6 +223,12 @@ keep.forEach((i, k) => outData.set(data.subarray(i * FP.RECORD, (i + 1) * FP.REC
 const meta = keep.map((i) => GAME === 'mtg' ? [cards[i].name, cards[i].set, cards[i].num, cards[i].id, cards[i].formats]
   : [cards[i].name, cards[i].set, cards[i].num, cards[i].img, cards[i].big, cards[i].link]);
 const index = { data: outData, meta };
+let outEmb = null, embMd = '';
+if (emb) {
+  outEmb = new Int8Array(keep.length * EMB.DIM);
+  keep.forEach((i, k) => outEmb.set(emb.subarray(i * EMB.DIM, (i + 1) * EMB.DIM), k * EMB.DIM));
+}
+if (!meta.length) throw new Error('no card images could be read; keeping the existing index');
 await mkdir('data', { recursive: true });
 console.log('wrote', meta.length, 'cards,', outData.length, 'bytes');
 
@@ -243,9 +280,54 @@ const acc = (w) => heights.reduce((a, h) => a + results[h].hit[w] / results[h].n
 const weight = weights.reduce((a, b) => (acc(b) > acc(a) ? b : a));
 const hits = [...results[48].dHit[weight], ...results[72].dHit[weight]];
 const maxDist = Math.min(Number(pct(hits, 0.95)), Number(pct(nonCard[weight], 0.05)));
+// Embedding self-test: the same degraded copies and non-card crops, matched by cosine similarity.
+// The accept rule is a minimum similarity (above almost every non-card's best) and a minimum lead
+// over the next card with a different name.
+let embInfo = null;
+if (outEmb) {
+  const D = EMB.DIM, S2 = EMB.SCALE * EMB.SCALE, n = meta.length;
+  const embSearch = (q) => { // q: Int8Array; returns [{i, s}] best two distinct names
+    let b1 = { i: -1, s: -9 }, b2 = { i: -1, s: -9 };
+    for (let r = 0; r < n; r++) {
+      let dot = 0; const o = r * D;
+      for (let j = 0; j < D; j++) dot += q[j] * outEmb[o + j];
+      const sim = dot / S2;
+      if (sim > b1.s) { if (b1.i >= 0 && meta[b1.i][0] !== meta[r][0]) b2 = b1; b1 = { i: r, s: sim }; }
+      else if (sim > b2.s && meta[r][0] !== meta[b1.i][0]) b2 = { i: r, s: sim };
+    }
+    return [b1, b2];
+  };
+  const pc = (arr, p) => { if (!arr.length) return NaN; const v = [...arr].sort((a, b) => a - b); return +v[Math.min(v.length - 1, Math.floor(p * v.length))].toFixed(3); };
+  const hits = { 32: [], 48: [], 72: [], 120: [] }, gaps = [], counts = { 32: 0, 48: 0, 72: 0, 120: 0 }, nonSims = [];
+  for (const [i, buf] of sampleBufs) {
+    if (!pos.has(i)) continue;
+    for (const h of heights) {
+      let q; try { q = await embed(await degrade(buf, h)); } catch { continue; }
+      counts[h]++;
+      const [b1, b2] = embSearch(q);
+      if (meta[b1.i][0] === cards[i].name) { hits[h].push(b1.s); gaps.push(b1.s - b2.s); }
+    }
+  }
+  let kk = 0;
+  for (const [, buf] of sampleBufs) {
+    if (kk++ >= 300) break;
+    const img = sharp(buf), { width, height } = await img.metadata();
+    const part = kk % 2 ? { left: 0, top: Math.round(height * 0.55), width, height: Math.round(height * 0.45) }
+      : { left: Math.round(width * 0.3), top: Math.round(height * 0.2), width: Math.round(width * 0.5), height: Math.round(height * 0.3) };
+    try { nonSims.push(embSearch(await embed(await img.extract(part).resize(146, 204, { fit: 'fill' }).toBuffer()))[0].s); } catch { /* odd-sized scan */ }
+  }
+  const minSim = Number(pc(nonSims, 0.99)), minGap = 0.02;
+  embInfo = { dim: D, scale: EMB.SCALE, w: EMB.W, h: EMB.H, minSim, minGap };
+  let emd = `\n### Learned embedding\n\nTop-1 by card height: ${heights.map((h) => `${h}px ${(100 * hits[h].length / counts[h]).toFixed(1)}%`).join(', ')}.\n`;
+  emd += `Correct matches' similarity p05 ${pc([...hits[48], ...hits[72]], 0.05)}, p50 ${pc([...hits[48], ...hits[72]], 0.5)}; lead p10 ${pc(gaps, 0.1)}. Non-cards' best similarity p50 ${pc(nonSims, 0.5)}, p99 ${minSim}.\n`;
+  emd += `Accepted (similarity ≥ ${minSim}, lead ≥ ${minGap}) and correct: ${heights.map((h) => `${h}px ${(100 * hits[h].filter((x) => x >= minSim).length / counts[h]).toFixed(1)}%`).join(', ')}\n`;
+  console.log(emd);
+  embMd = emd;
+}
 await writeFile(`data/${GAME}.bin`, outData); // written together, so a failed run leaves the old pair
+if (outEmb) await writeFile(`data/${GAME}.emb`, new Uint8Array(outEmb.buffer));
 await writeFile(`data/${GAME}.json`, JSON.stringify({ built: new Date().toISOString(), game: GAME, source, record: FP.RECORD,
-  count: meta.length, weight, maxDist, minMargin: 1, ...(GAME === 'mtg' ? { formats: FORMATS } : {}), cards: meta }));
+  count: meta.length, weight, maxDist, minMargin: 1, ...(embInfo ? { embedding: embInfo } : {}), ...(GAME === 'mtg' ? { formats: FORMATS } : {}), cards: meta }));
 
 let md = `## Picture index: ${GAME}\n\n${meta.length} artworks, ${(outData.length / 1e6).toFixed(1)} MB. Chosen colour weight ${weight}, max distance ${maxDist}.\n\n`;
 md += `### Top-1 accuracy on degraded cards (by card height in px)\n\n| height | n | ${weights.map((w) => 'w=' + w).join(' | ')} | dist p50 / p95 (hits, chosen w) | margin p10 |\n|---|---|${weights.map(() => '---').join('|')}|---|---|\n`;
@@ -255,6 +337,7 @@ for (const h of heights) {
 }
 md += `\nNon-card crops, best distance (chosen w): p05 ${pct(nonCard[weight], 0.05)}, p50 ${pct(nonCard[weight], 0.5)}, p90 ${pct(nonCard[weight], 0.9)}\n`;
 const kept = (h) => results[h].dHit[weight].filter((d) => d <= maxDist).length / results[h].n;
+if (embMd) md += embMd;
 md += `\nShare of cards identified correctly *and* under the cut-off: ${heights.map((h) => `${h}px ${(100 * kept(h)).toFixed(1)}%`).join(', ')}\n`;
 console.log(md);
 if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, md);

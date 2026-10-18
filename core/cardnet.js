@@ -19,11 +19,18 @@
   // The network takes a few hundred milliseconds per frame, so it runs in a worker to keep the
   // page responsive. The worker is made from a string so this file stays a plain classic script.
   const WORKER = `
-    let session;
+    let session, embedder;
     self.onmessage = async (e) => {
       const m = e.data;
       try {
-        if (m.type === 'load') {
+        if (m.type === 'loadEmbed') {
+          embedder = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ['wasm'] });
+          postMessage({ id: m.id });
+        } else if (m.type === 'embed') {
+          const out = await embedder.run({ image: new ort.Tensor('float32', m.data, [m.n, 3, m.h, m.w]) });
+          const t = out.embedding;
+          postMessage({ id: m.id, data: t.data }, [t.data.buffer]);
+        } else if (m.type === 'load') {
           if (typeof ort === 'undefined') importScripts(m.ortUrl);
           ort.env.wasm.wasmPaths = m.ortUrl.replace(/[^/]*$/, '');
           ort.env.wasm.numThreads = 1;
@@ -65,6 +72,43 @@
       })().catch((e) => { loading = null; if (worker) worker.terminate(); worker = null; throw e; });
     }
     return loading;
+  }
+
+  // Card picture embedding (tools/matcher/train_embed.py): a second network in the same worker
+  // that maps a card crop to 128 numbers, close together for the same card however blurry,
+  // small or glared. Loads after the detector, which loads the runtime.
+  let embedLoading = null, embedReady = false;
+  const EW = 96, EH = 128;
+  const ecanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  function loadEmbed(modelUrl) {
+    if (!embedLoading) {
+      embedLoading = (async () => {
+        if (!ready) throw new Error('detector not loaded');
+        await call({ type: 'loadEmbed', modelUrl: new URL(modelUrl, location.href).href });
+        embedReady = true;
+      })().catch((e) => { embedLoading = null; throw e; });
+    }
+    return embedLoading;
+  }
+  // boxes: [{cx, cy, cw, ch, angle}] in source pixels (angle clockwise, degrees). Resolves to a
+  // Float32Array of boxes.length x 128 unit vectors.
+  async function embed(source, boxes) {
+    if (!embedReady) throw new Error('embedder not loaded');
+    ecanvas.width = EW; ecanvas.height = EH;
+    const ctx = ecanvas.getContext('2d', { willReadFrequently: true }), N = EW * EH;
+    const data = new Float32Array(boxes.length * 3 * N);
+    boxes.forEach((b, k) => {
+      ctx.save();
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, EW, EH);
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.translate(EW / 2, EH / 2); ctx.scale(EW / b.cw, EH / b.ch); ctx.rotate(-b.angle * Math.PI / 180); ctx.translate(-b.cx, -b.cy);
+      ctx.drawImage(source, 0, 0);
+      ctx.restore();
+      const px = ctx.getImageData(0, 0, EW, EH).data, o = k * 3 * N;
+      for (let i = 0; i < N; i++) { data[o + i] = px[i * 4] / 255; data[o + N + i] = px[i * 4 + 1] / 255; data[o + 2 * N + i] = px[i * 4 + 2] / 255; }
+    });
+    const r = await call({ type: 'embed', data, n: boxes.length, w: EW, h: EH }, [data.buffer]);
+    return r.data;
   }
 
   // Corners of a rotated box, for overlap tests.
@@ -141,5 +185,5 @@
   }
 
   root.CardZoom = root.CardZoom || {};
-  root.CardZoom.cardnet = { load, detect, ready: () => ready, setOrtUrl: (u) => { ortUrls = [u]; }, rotatedIou };
+  root.CardZoom.cardnet = { load, detect, ready: () => ready, loadEmbed, embed, embedReady: () => embedReady, setOrtUrl: (u) => { ortUrls = [u]; }, rotatedIou };
 })(typeof window !== 'undefined' ? window : self);
