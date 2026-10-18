@@ -44,6 +44,8 @@ button.nudge { background: var(--accent-2); border-color: var(--accent-2); color
 .mark { position: absolute; pointer-events: auto; transition: left .3s linear, top .3s linear, width .3s linear, height .3s linear; }
 .mark img { position: absolute; border-radius: 4.5% / 3.2%; box-shadow: 0 1px 6px rgba(0,0,0,.5); pointer-events: none; }
 .mark.debug { border: 2px dashed var(--sel); border-radius: 4px; }
+.mark.debug[data-near]::after { content: attr(data-near); position: absolute; left: 0; top: 100%; font-size: 10px; line-height: 1.2; white-space: nowrap;
+  background: rgba(0,0,0,.75); color: #ffd166; padding: 1px 3px; pointer-events: none; }
 .mark .nc { position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 16px;
   background: var(--panel); color: var(--text); display: none; z-index: 1; }
 .mark:hover .nc { display: block; }
@@ -877,6 +879,7 @@ const S = {
   tracks: [],         // cards currently spotted (source pixel boxes with stable ids)
   tries: new Map(),   // track id -> picture-match attempts so far
   ids: new Map(),     // track id -> {card, flip, sig}: what the card was recognised as
+  near: new Map(),    // track id -> closest match so far, recognised or not (shown with ?debug)
   hover: null,        // track id under the mouse
 };
 const tracker = D.createTracker();
@@ -908,7 +911,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.excluded = []; S.hover = null;
+  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); S.excluded = []; S.hover = null;
   renderMarks();
 }
 
@@ -1071,6 +1074,10 @@ function liveStatus(dets) {
   if (have < want) parts.push(`Card lists loaded: ${have} of ${want}${failed.length ? ` (failed: ${failed.join(', ')})` : ''}.`);
   const named = S.tracks.filter((t) => S.ids.has(t.id)).length;
   parts.push(dets.length ? `${dets.length} cards spotted, ${named} recognised.` : blankFrame() ? 'The captured video looks blank.' : 'No cards spotted yet.');
+  if (DEBUG) {
+    const tried = S.tracks.filter((t) => S.tries.get(t.id)).length, v = S.video;
+    parts.push(`[tried ${tried}, frame ${v.videoWidth}x${v.videoHeight}, games ${Object.keys(pictureIndexes).join('/')}, finder ${netState || 'off'}]`);
+  }
   status(parts.join(' '), true);
 }
 // A capture that only delivers black frames looks like "no cards"; say so instead.
@@ -1108,8 +1115,8 @@ function afterDetect(dets, region) {
   if (!S.video) return;
   S.tracks = tracker.update(dets.filter((d) => !isExcluded(d, region)));
   for (const id of S.ids.keys()) if (!S.tracks.some((t) => t.id === id)) S.ids.delete(id);
+  for (const id of progress.keys()) if (!S.tracks.some((t) => t.id === id)) progress.delete(id);
   if (++S.tick % 6 === 0) recheckIdentities();
-  recognise();
   renderMarks();
   if (S.tick % 3 === 0) liveStatus(dets);
 }
@@ -1163,24 +1170,44 @@ function loadPictureIndexes() {
 // otherwise every game, most-matched first.
 function gamesToTry() {
   const gs = Object.keys(pictureIndexes).sort((a, b) => gameHits[b] - gameHits[a]);
-  if (gs.length > 1 && gameHits[gs[0]] >= 3 && gameHits[gs[1]] === 0) return gs.slice(0, 1);
+  if (gs.length > 1 && gameHits[gs[0]] >= 2 && gameHits[gs[1]] === 0) return gs.slice(0, 1);
   return gs;
 }
 // Every steady card is tried; one that doesn't match (a non-card, or a bad frame) is retried a
-// few times on later frames. Each try takes about a tenth of a second per game, so each tick
-// spends a fixed budget: the hovered card first, then the cards tried least so far.
+// few times on later frames. Matching one card against one game's list takes about a tenth of a
+// second, so each tick spends a fixed budget, one game at a time, and a card's games may be
+// spread over several ticks: the hovered card first, then the cards tried least so far, biggest
+// first (a big card is the likeliest to match, and its match settles which game this is).
+const progress = new Map(); // track id -> games already tried in its current try
+const lastTry = new Map();  // track id -> when its last try finished
+// Recognition runs on its own clock, not once per detection: on a slow computer the detector can
+// take a second or more per frame, and recognition waiting on it took minutes to name anything.
+setInterval(() => {
+  if (!S.video || document.hidden) return;
+  const before = S.ids.size;
+  recognise();
+  if (S.ids.size !== before) renderMarks();
+}, 200);
 function recognise() {
   if (!Object.keys(pictureIndexes).length) return;
   const until = performance.now() + 150;
   const due = S.tracks.filter((t) => {
     if (t.hits < 3 || S.ids.has(t.id)) return false;
     const tries = S.tries.get(t.id) || 0;
-    return tries < 8 && (!tries || S.tick % 3 === 0);
-  }).sort((a, b) => (b.id === S.hover) - (a.id === S.hover) || (S.tries.get(a.id) || 0) - (S.tries.get(b.id) || 0));
+    return tries < 8 && (!tries || progress.has(t.id) || performance.now() - (lastTry.get(t.id) || 0) > 1000);
+  }).sort((a, b) => (b.id === S.hover) - (a.id === S.hover) || (S.tries.get(a.id) || 0) - (S.tries.get(b.id) || 0)
+    || b.w * b.h - a.w * a.h);
   for (const t of due) {
-    if (performance.now() > until) break;
+    const done = progress.get(t.id) || new Set();
+    for (const game of gamesToTry()) {
+      if (done.has(game)) continue;
+      if (performance.now() > until) { progress.set(t.id, done); return; }
+      done.add(game);
+      if (identifyByPicture(t, game)) break;
+    }
+    progress.delete(t.id);
     S.tries.set(t.id, (S.tries.get(t.id) || 0) + 1);
-    identifyByPicture(t);
+    lastTry.set(t.id, performance.now());
   }
 }
 // Accept a match only when it is close and clearly better than the next-best card.
@@ -1189,12 +1216,12 @@ function recognise() {
 // but almost never with a clear lead, so a loose match also needs a wide margin. Both are
 // relative to the index's cut-off, since that scales with the colour weight the build picks.
 const STRONG_LEAD = 0.42, CLOSE_MATCH = 0.5;
-function identifyByPicture(t) {
+function identifyByPicture(t, game) {
   // The trained detector gives the card's angle and size; the edge detector only an upright box.
   const o = t.obb, cx = o ? o.cx : t.x + t.w / 2, cy = o ? o.cy : t.y + t.h / 2;
   const cw = o ? o.cw : t.rotated ? t.h : t.w, ch = o ? o.ch : t.rotated ? t.w : t.h;
   const base = o ? o.angle : t.rotated ? 90 : 0;
-  for (const game of gamesToTry()) {
+  {
     const ix = pictureIndexes[game], info = ix.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
     let best;
     try {
@@ -1202,9 +1229,12 @@ function identifyByPicture(t) {
         F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle),
       info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
     } catch { return false; }
-    if (best.d > maxDist || best.margin < minMargin) continue;
-    if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) continue;
-    gameHits[game]++;
+    const near = S.near.get(t.id);
+    if (!near || best.d / maxDist < near.d / near.maxDist) S.near.set(t.id, { game, name: ix.meta[best.i][0], d: best.d, margin: best.margin, maxDist });
+    if (best.d > maxDist || best.margin < minMargin) return false;
+    if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
+    // A close match with a wide lead settles the game on its own; a looser one needs a second.
+    gameHits[game] += best.d <= CLOSE_MATCH * maxDist && best.margin >= STRONG_LEAD * maxDist ? 2 : 1;
     S.ids.set(t.id, { card: pictureCard(game, ix.meta[best.i]), flip: best.variant.flip, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
     return true;
   }
@@ -1245,6 +1275,10 @@ function renderMarks() {
     }
     const b = toStage(t);
     m.classList.toggle('debug', !id);
+    if (DEBUG && !id) {
+      const n = S.near.get(t.id);
+      m.dataset.near = n ? `${n.name} ${n.d.toFixed(0)}/${n.maxDist.toFixed(0)} m${n.margin.toFixed(0)} (${S.tries.get(t.id) || 0})` : `not tried (${t.hits} hits)`;
+    } else delete m.dataset.near;
     m.title = id ? `${id.card.name}${id.card.set ? ' (' + id.card.set + ')' : ''}` : '';
     m.style.cursor = id && id.card.link ? 'pointer' : 'default';
     Object.assign(m.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
