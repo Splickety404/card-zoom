@@ -55,7 +55,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); S.excluded = []; S.hover = null;
+  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); seenFormats.clear(); if (pictureIndexes.mtg) pictureIndexes.mtg.narrow = pictureIndexes.mtg.format = null; S.excluded = []; S.hover = null;
   renderMarks();
 }
 
@@ -220,7 +220,7 @@ function liveStatus(dets) {
   parts.push(dets.length ? `${dets.length} cards spotted, ${named} recognised.` : blankFrame() ? 'The captured video looks blank.' : 'No cards spotted yet.');
   if (DEBUG) {
     const tried = S.tracks.filter((t) => S.tries.get(t.id)).length, v = S.video;
-    parts.push(`[tried ${tried}, frame ${v.videoWidth}x${v.videoHeight}, games ${Object.keys(pictureIndexes).join('/')}, finder ${netState || 'off'}]`);
+    parts.push(`[tried ${tried}, frame ${v.videoWidth}x${v.videoHeight}, games ${Object.keys(pictureIndexes).join('/')}${pictureIndexes.mtg?.format ? ', format ' + pictureIndexes.mtg.format : ''}, finder ${netState || 'off'}]`);
   }
   status(parts.join(' '), true);
 }
@@ -360,6 +360,24 @@ function recognise() {
 // but almost never with a clear lead, so a loose match also needs a wide margin. Both are
 // relative to the index's cut-off, since that scales with the colour weight the build picks.
 const STRONG_LEAD = 0.42, CLOSE_MATCH = 0.5;
+// Magic has 50,000+ artworks but a match is played in one format. Once several cards are named,
+// the narrowest format they are all legal in is assumed, and every other try searches only cards
+// legal there: fewer look-alikes, so blurry cards win by a clearer margin. The remaining tries
+// search everything, so a card from outside the guess can still be found and widen it.
+const NARROWING = ['standard', 'pioneer', 'modern', 'legacy', 'vintage'];
+const seenFormats = new Map(); // card name -> legality bits, for named Magic cards
+function updateFormat(ix) {
+  const names = ix.info.formats;
+  if (!names || seenFormats.size < 5) return;
+  for (const f of NARROWING) {
+    const bit = 1 << names.indexOf(f);
+    if (names.indexOf(f) < 0 || ![...seenFormats.values()].every((b) => b & bit)) continue;
+    if (ix.format === f) return;
+    ix.format = f;
+    ix.narrow = Uint8Array.from(ix.meta, (row) => (row[4] & bit ? 1 : 0));
+    return;
+  }
+}
 function identifyByPicture(t, game) {
   // The trained detector gives the card's angle and size; the edge detector only an upright box.
   const o = t.obb, cx = o ? o.cx : t.x + t.w / 2, cy = o ? o.cy : t.y + t.h / 2;
@@ -368,17 +386,19 @@ function identifyByPicture(t, game) {
   {
     const ix = pictureIndexes[game], info = ix.info, maxDist = info.maxDist ?? 24, minMargin = info.minMargin ?? 1;
     let best;
+    ix.allow = ix.narrow && (S.tries.get(t.id) || 0) % 2 === 0 ? ix.narrow : null;
     try {
       best = F.matchVariants(ix, (flip, angle, scale, dx, dy) =>
         F.describeBox(S.video, cx + dx * cw, cy + dy * ch, cw * scale, ch * scale, base + flip + angle),
       info.weight ?? F.COLOR_WEIGHT, o ? F.FINE_OBB : undefined);
-    } catch { return false; }
+    } catch { return false; } finally { ix.allow = null; }
     const near = S.near.get(t.id);
     if (!near || best.d / maxDist < near.d / near.maxDist) S.near.set(t.id, { game, name: ix.meta[best.i][0], d: best.d, margin: best.margin, maxDist });
     if (best.d > maxDist || best.margin < minMargin) return false;
     if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
     // A close match with a wide lead settles the game on its own; a looser one needs a second.
     gameHits[game] += best.d <= CLOSE_MATCH * maxDist && best.margin >= STRONG_LEAD * maxDist ? 2 : 1;
+    if (game === 'mtg' && ix.meta[best.i][4] != null) { seenFormats.set(ix.meta[best.i][0], ix.meta[best.i][4]); updateFormat(ix); }
     S.ids.set(t.id, { card: pictureCard(game, ix.meta[best.i]), flip: best.variant.flip, sig: M.signature(S.video, t.x, t.y, t.w, t.h) });
     return true;
   }

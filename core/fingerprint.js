@@ -85,11 +85,14 @@
     return ham + COLOR_WEIGHT * col / COLOR_BYTES;
   }
 
-  // index: {data: Uint8Array of count*RECORD, meta: [[name, set, number, id], ...]}.
-  // Returns the k closest distinct names: [{i, d}], best first.
+  // index: {data: Uint8Array of count*RECORD, meta: [[name, set, number, id], ...], allow?}.
+  // allow, when set, is a Uint8Array with 0 for records to leave out (cards not legal in the
+  // stream's format, say). Returns the k closest distinct names: [{i, d}], best first.
   function search(index, desc, k = 5, weight = COLOR_WEIGHT) {
     const n = index.meta.length, best = [];
+    const allow = index.allow;
     for (let r = 0; r < n; r++) {
+      if (allow && !allow[r]) continue;
       const off = r * RECORD;
       let ham = 0;
       for (let i = 0; i < 8; i++) ham += POP[desc[i] ^ index.data[off + i]];
@@ -109,9 +112,10 @@
 
   // The k closest records (names may repeat), optionally only among the given record numbers.
   function nearest(index, desc, k, weight = COLOR_WEIGHT, among = null) {
-    const n = among ? among.length : index.meta.length, best = [];
+    const n = among ? among.length : index.meta.length, best = [], allow = index.allow;
     for (let j = 0; j < n; j++) {
       const r = among ? among[j] : j, off = r * RECORD;
+      if (allow && !allow[r]) continue;
       let ham = 0;
       for (let i = 0; i < 8; i++) ham += POP[desc[i] ^ index.data[off + i]];
       if (best.length === k && ham >= best[k - 1].d) continue;
