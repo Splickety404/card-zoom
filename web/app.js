@@ -55,7 +55,7 @@ function parseSource(raw) {
 }
 
 function resetSpotting() {
-  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); seenFormats.clear(); if (pictureIndexes.mtg) pictureIndexes.mtg.narrow = pictureIndexes.mtg.format = null; S.excluded = []; S.hover = null;
+  tracker.reset(); S.tracks = []; S.ids.clear(); S.tries.clear(); S.near.clear(); progress.clear(); seenFormats.clear(); namedOnStream.clear(); if (pictureIndexes.mtg) pictureIndexes.mtg.narrow = pictureIndexes.mtg.format = null; S.excluded = []; S.hover = null;
   renderMarks();
 }
 
@@ -366,6 +366,7 @@ const STRONG_LEAD = 0.42, CLOSE_MATCH = 0.5;
 // search everything, so a card from outside the guess can still be found and widen it.
 const NARROWING = ['standard', 'pioneer', 'modern', 'legacy', 'vintage'];
 const seenFormats = new Map(); // card name -> legality bits, for named Magic cards
+const namedOnStream = new Set(); // 'game|name' of every card named since the video was loaded
 function updateFormat(ix) {
   const names = ix.info.formats;
   if (!names || seenFormats.size < 5) return;
@@ -395,7 +396,11 @@ function identifyByPicture(t, game) {
     const near = S.near.get(t.id);
     if (!near || best.d / maxDist < near.d / near.maxDist) S.near.set(t.id, { game, name: ix.meta[best.i][0], d: best.d, margin: best.margin, maxDist });
     if (best.d > maxDist || best.margin < minMargin) return false;
-    if (best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
+    // Decks repeat cards (four copies, basic lands): a loose match to a card already named on
+    // this stream doesn't need the wide lead a first sighting does.
+    const seenBefore = namedOnStream.has(game + '|' + ix.meta[best.i][0]);
+    if (!seenBefore && best.margin < STRONG_LEAD * maxDist && best.d > CLOSE_MATCH * maxDist) return false;
+    namedOnStream.add(game + '|' + ix.meta[best.i][0]);
     // A close match with a wide lead settles the game on its own; a looser one needs a second.
     gameHits[game] += best.d <= CLOSE_MATCH * maxDist && best.margin >= STRONG_LEAD * maxDist ? 2 : 1;
     if (game === 'mtg' && ix.meta[best.i][4] != null) { seenFormats.set(ix.meta[best.i][0], ix.meta[best.i][4]); updateFormat(ix); }
