@@ -1,22 +1,22 @@
 ## Picture index: lorcana
 
-3501 artworks, 0.3 MB. Chosen colour weight 1, max distance 26.8.
+3501 artworks, 0.3 MB. Chosen colour weight 3, max distance 49.6.
 
 ### Top-1 accuracy on degraded cards (by card height in px)
 
 | height | n | w=0.25 | w=0.5 | w=1 | w=1.5 | w=2 | w=3 | dist p50 / p95 (hits, chosen w) | margin p10 |
 |---|---|---|---|---|---|---|---|---|---|
-| 32 | 800 | 98.4% | 99.8% | 100.0% | 100.0% | 100.0% | 100.0% | 23.0 / 30.3 | 13.3 |
-| 48 | 800 | 99.1% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 20.5 / 27.5 | 15.8 |
-| 72 | 800 | 99.8% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 19.2 / 25.5 | 18.3 |
-| 120 | 800 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 16.3 / 22.2 | 20.6 |
+| 32 | 799 | 98.1% | 99.5% | 99.7% | 99.7% | 99.7% | 99.7% | 43.2 / 56.1 | 28.6 |
+| 48 | 799 | 99.2% | 99.6% | 99.6% | 99.6% | 99.6% | 99.6% | 38.3 / 50.6 | 34.2 |
+| 72 | 799 | 99.4% | 99.7% | 99.7% | 99.7% | 99.7% | 99.9% | 34.8 / 48.4 | 37.3 |
+| 120 | 799 | 99.7% | 99.7% | 99.7% | 99.7% | 99.7% | 99.7% | 30.4 / 42.2 | 41.6 |
 
-Non-card crops, best distance (chosen w): p05 39.9, p50 47.1, p90 52.2
+Non-card crops, best distance (chosen w): p05 76.9, p50 94.8, p90 108.4
 
 ### Learned embedding
 
-Top-1 by card height: 32px 98.5%, 48px 100.0%, 72px 100.0%, 120px 100.0%.
-Correct matches' similarity p05 0.786, p50 0.884; lead p10 0.166. Non-cards' best similarity p50 0.434, p99 0.697.
-Accepted (similarity ≥ 0.697, lead ≥ 0.02) and correct: 32px 77.0%, 48px 99.8%, 72px 100.0%, 120px 100.0%
+Top-1 by card height: 32px 99.0%, 48px 100.0%, 72px 100.0%, 120px 100.0%.
+Correct matches' similarity p05 0.784, p50 0.883; lead p10 0.169. Non-cards' best similarity p50 0.429, p99 0.708.
+Accepted (similarity ≥ 0.708, lead ≥ 0.02) and correct: 32px 74.2%, 48px 98.9%, 72px 100.0%, 120px 100.0%
 
-Share of cards identified correctly *and* under the cut-off: 32px 80.0%, 48px 92.8%, 72px 97.3%, 120px 99.1%
+Share of cards identified correctly *and* under the cut-off: 32px 77.6%, 48px 93.2%, 72px 96.2%, 120px 99.4%
