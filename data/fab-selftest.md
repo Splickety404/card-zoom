@@ -1,22 +1,22 @@
 ## Picture index: fab
 
-16657 artworks, 1.2 MB. Chosen colour weight 1, max distance 33.5.
+16657 artworks, 1.2 MB. Chosen colour weight 2, max distance 48.
 
 ### Top-1 accuracy on degraded cards (by card height in px)
 
 | height | n | w=0.25 | w=0.5 | w=1 | w=1.5 | w=2 | w=3 | dist p50 / p95 (hits, chosen w) | margin p10 |
 |---|---|---|---|---|---|---|---|---|---|
-| 32 | 798 | 60.0% | 65.3% | 68.2% | 67.9% | 67.9% | 67.4% | 28.5 / 36.9 | 0.0 |
-| 48 | 798 | 63.8% | 67.3% | 68.4% | 68.7% | 68.4% | 68.5% | 26.5 / 34.2 | 0.0 |
-| 72 | 798 | 62.0% | 66.2% | 67.0% | 66.9% | 67.2% | 66.9% | 25.8 / 33.1 | 0.0 |
-| 120 | 798 | 66.8% | 67.5% | 67.7% | 67.5% | 67.5% | 67.3% | 22.1 / 29.0 | 0.0 |
+| 32 | 799 | 60.2% | 66.3% | 67.7% | 67.3% | 67.7% | 67.1% | 40.0 / 52.2 | 0.1 |
+| 48 | 799 | 62.6% | 65.6% | 66.7% | 67.1% | 66.8% | 67.2% | 37.1 / 48.5 | 0.1 |
+| 72 | 799 | 65.3% | 67.7% | 68.0% | 68.2% | 68.3% | 68.2% | 36.3 / 47.6 | 0.1 |
+| 120 | 799 | 67.0% | 67.1% | 67.1% | 67.5% | 67.5% | 67.5% | 31.4 / 41.1 | 0.1 |
 
-Non-card crops, best distance (chosen w): p05 38.5, p50 44.6, p90 49.5
+Non-card crops, best distance (chosen w): p05 56.9, p50 65.8, p90 75.9
 
 ### Learned embedding
 
-Top-1 by card height: 32px 59.8%, 48px 63.8%, 72px 65.7%, 120px 66.7%.
-Correct matches' similarity p05 0.72, p50 0.843; lead p10 0.002. Non-cards' best similarity p50 0.446, p99 0.626.
-Accepted (similarity ≥ 0.626, lead ≥ 0.02) and correct: 32px 46.7%, 48px 63.2%, 72px 65.7%, 120px 66.7%
+Top-1 by card height: 32px 60.8%, 48px 65.2%, 72px 65.3%, 120px 66.8%.
+Correct matches' similarity p05 0.701, p50 0.838; lead p10 0.002. Non-cards' best similarity p50 0.447, p99 0.641.
+Accepted (similarity ≥ 0.641, lead ≥ 0.02) and correct: 32px 41.1%, 48px 64.0%, 72px 65.3%, 120px 66.8%
 
-Share of cards identified correctly *and* under the cut-off: 32px 58.9%, 48px 64.3%, 72px 64.4%, 120px 67.2%
+Share of cards identified correctly *and* under the cut-off: 32px 57.6%, 48px 63.0%, 72px 65.5%, 120px 67.0%
